@@ -21,7 +21,8 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include <stdio.h>
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -59,7 +60,28 @@ static void MX_USART2_UART_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static void uart_print(const char *s)
+{
+    HAL_UART_Transmit(&huart2, (uint8_t *)s, strlen(s), 100);
+}
 
+static uint8_t rc522_read_reg(uint8_t reg)
+{
+    uint8_t tx[2] = { (uint8_t)(0x80 | (reg << 1)), 0x00 };
+    uint8_t rx[2] = {0};
+    HAL_GPIO_WritePin(RC522_CS_GPIO_Port, RC522_CS_Pin, GPIO_PIN_RESET);
+    HAL_SPI_TransmitReceive(&hspi1, tx, rx, 2, 100);
+    HAL_GPIO_WritePin(RC522_CS_GPIO_Port, RC522_CS_Pin, GPIO_PIN_SET);
+    return rx[1];
+}
+
+static void rc522_write_reg(uint8_t reg, uint8_t val)
+{
+    uint8_t tx[2] = { (uint8_t)((reg << 1) & 0x7E), val };
+    HAL_GPIO_WritePin(RC522_CS_GPIO_Port, RC522_CS_Pin, GPIO_PIN_RESET);
+    HAL_SPI_Transmit(&hspi1, tx, 2, 100);
+    HAL_GPIO_WritePin(RC522_CS_GPIO_Port, RC522_CS_Pin, GPIO_PIN_SET);
+}
 /* USER CODE END 0 */
 
 /**
@@ -94,7 +116,10 @@ int main(void)
   MX_SPI1_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
-
+  HAL_GPIO_WritePin(RC522_RST_GPIO_Port, RC522_RST_Pin, GPIO_PIN_RESET);
+  HAL_Delay(10);
+  HAL_GPIO_WritePin(RC522_RST_GPIO_Port, RC522_RST_Pin, GPIO_PIN_SET);
+  HAL_Delay(50);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -104,6 +129,11 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+	  char buf[96];
+	  uint8_t ver = rc522_read_reg(0x37);
+	  snprintf(buf, sizeof buf, "VersionReg = 0x%02X\r\n", ver);
+	  uart_print(buf);
+	  HAL_Delay(1000);
   }
   /* USER CODE END 3 */
 }
