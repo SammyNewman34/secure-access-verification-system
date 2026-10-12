@@ -81,6 +81,22 @@ static void rc522_write_reg(uint8_t reg, uint8_t val)
     HAL_GPIO_WritePin(RC522_CS_GPIO_Port, RC522_CS_Pin, GPIO_PIN_RESET);
     HAL_SPI_Transmit(&hspi1, tx, 2, 100);
     HAL_GPIO_WritePin(RC522_CS_GPIO_Port, RC522_CS_Pin, GPIO_PIN_SET);
+
+}
+
+static void rc522_dump_regs(void)
+{
+    char buf[48];
+    uart_print("--- RC522 register dump ---\r\n");
+    for (uint8_t r = 0; r < 0x40; r++) {
+        if (r == 0x09) {
+            snprintf(buf, sizeof buf, "0x%02X: skipped (FIFOData)\r\n", r);
+        } else {
+            snprintf(buf, sizeof buf, "0x%02X: 0x%02X\r\n", r, rc522_read_reg(r));
+        }
+        uart_print(buf);
+    }
+    uart_print("--- end ---\r\n");
 }
 /* USER CODE END 0 */
 
@@ -120,6 +136,17 @@ int main(void)
   HAL_Delay(10);
   HAL_GPIO_WritePin(RC522_RST_GPIO_Port, RC522_RST_Pin, GPIO_PIN_SET);
   HAL_Delay(50);
+
+  rc522_dump_regs();
+
+  {
+      char b[64];
+      rc522_write_reg(0x01, 0x0F);   // CommandReg = SoftReset
+      HAL_Delay(50);                 // wait for the chip to restart (my guess at a safe time)
+      snprintf(b, sizeof b, "After soft reset: Cmd=0x%02X Mode=0x%02X TxCtl=0x%02X\r\n",
+               rc522_read_reg(0x01), rc522_read_reg(0x11), rc522_read_reg(0x14));
+      uart_print(b);
+  }
   /* USER CODE END 2 */
 
   /* Infinite loop */
