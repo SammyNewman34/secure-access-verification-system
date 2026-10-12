@@ -98,6 +98,37 @@ static void rc522_dump_regs(void)
     }
     uart_print("--- end ---\r\n");
 }
+
+// returns 0 = ok, 1 = timeout (no card), 2 = ErrIRq, 3 = unexpected length
+static uint8_t rc522_reqa(uint8_t *atqa)
+{
+    rc522_write_reg(0x01, 0x00);   // Idle
+    rc522_write_reg(0x04, 0x7F);   // clear all ComIrq flags
+    rc522_write_reg(0x0A, 0x80);   // flush FIFO (assumed bit 7)
+    rc522_write_reg(0x0D, 0x07);   // TxLastBits = 7 (7-bit frame)
+    rc522_write_reg(0x09, 0x26);   // REQA into FIFO
+    rc522_write_reg(0x01, 0x0C);   // Transceive
+    rc522_write_reg(0x0D, 0x87);   // StartSend + TxLastBits = 7
+
+    uint32_t t0 = HAL_GetTick();
+    uint8_t irq;
+    do {
+        irq = rc522_read_reg(0x04);
+        if (irq & 0x22) break;     // RxIRq (bit 5) or ErrIRq (bit 1)
+    } while (HAL_GetTick() - t0 < 30);
+
+    rc522_write_reg(0x0D, 0x00);   // clear StartSend
+    rc522_write_reg(0x01, 0x00);   // back to Idle
+
+    if (!(irq & 0x22))  return 1;
+    if (irq & 0x02)     return 2;
+    if (rc522_read_reg(0x0A) != 2) return 3;
+    atqa[0] = rc522_read_reg(0x09);
+    atqa[1] = rc522_read_reg(0x09);
+    return 0;
+}
+
+
 /* USER CODE END 0 */
 
 /**
@@ -137,6 +168,7 @@ int main(void)
   HAL_GPIO_WritePin(RC522_RST_GPIO_Port, RC522_RST_Pin, GPIO_PIN_SET);
   HAL_Delay(50);
 
+  /*
   rc522_dump_regs();
 
   {
@@ -147,6 +179,7 @@ int main(void)
                rc522_read_reg(0x01), rc522_read_reg(0x11), rc522_read_reg(0x14));
       uart_print(b);
   }
+  */
 
   {
       char b[64];
@@ -164,11 +197,15 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  char buf[96];
-	  uint8_t ver = rc522_read_reg(0x37);
-	  snprintf(buf, sizeof buf, "VersionReg = 0x%02X\r\n", ver);
+	  char buf[64];
+	  uint8_t atqa[2];
+	  uint8_t r = rc522_reqa(atqa);
+	  if (r == 0)
+	      snprintf(buf, sizeof buf, "ATQA = %02X %02X\r\n", atqa[0], atqa[1]);
+	  else
+	      snprintf(buf, sizeof buf, "REQA result=%u ErrorReg=0x%02X\r\n", r, rc522_read_reg(0x06));
 	  uart_print(buf);
-	  HAL_Delay(1000);
+	  HAL_Delay(300);
   }
   /* USER CODE END 3 */
 }
