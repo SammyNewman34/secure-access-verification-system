@@ -147,6 +147,14 @@ int main(void)
                rc522_read_reg(0x01), rc522_read_reg(0x11), rc522_read_reg(0x14));
       uart_print(b);
   }
+
+  {
+      char b[64];
+      rc522_write_reg(0x14, rc522_read_reg(0x14) | 0x03);
+      snprintf(b, sizeof b, "TxCtl after antenna on = 0x%02X\r\n", rc522_read_reg(0x14));
+      uart_print(b);
+  }
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
