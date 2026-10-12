@@ -128,6 +128,35 @@ static uint8_t rc522_reqa(uint8_t *atqa)
     return 0;
 }
 
+// returns 0 = ok, 1 = timeout, 2 = ErrIRq, 3 = bad length, 4 = BCC mismatch
+static uint8_t rc522_anticoll(uint8_t *uid)
+{
+    rc522_write_reg(0x01, 0x00);   // Idle
+    rc522_write_reg(0x04, 0x7F);   // clear ComIrq flags
+    rc522_write_reg(0x0A, 0x80);   // flush FIFO
+    rc522_write_reg(0x0D, 0x00);   // TxLastBits = 0 (full bytes)
+    rc522_write_reg(0x09, 0x93);   // SEL: cascade level 1
+    rc522_write_reg(0x09, 0x20);   // NVB: no UID bits known
+    rc522_write_reg(0x01, 0x0C);   // Transceive
+    rc522_write_reg(0x0D, 0x80);   // StartSend
+
+    uint32_t t0 = HAL_GetTick();
+    uint8_t irq;
+    do {
+        irq = rc522_read_reg(0x04);
+        if (irq & 0x22) break;
+    } while (HAL_GetTick() - t0 < 30);
+
+    rc522_write_reg(0x0D, 0x00);
+    rc522_write_reg(0x01, 0x00);
+
+    if (!(irq & 0x22))  return 1;
+    if (irq & 0x02)     return 2;
+    if ((rc522_read_reg(0x0A) & 0x7F) != 5) return 3;
+    for (uint8_t i = 0; i < 5; i++) uid[i] = rc522_read_reg(0x09);
+    if ((uid[0] ^ uid[1] ^ uid[2] ^ uid[3]) != uid[4]) return 4;
+    return 0;
+}
 
 /* USER CODE END 0 */
 
@@ -197,14 +226,19 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  char buf[64];
-	  uint8_t atqa[2];
+	  char buf[80];
+	  uint8_t atqa[2], uid[5];
 	  uint8_t r = rc522_reqa(atqa);
-	  if (r == 0)
-	      snprintf(buf, sizeof buf, "ATQA = %02X %02X\r\n", atqa[0], atqa[1]);
-	  else
-	      snprintf(buf, sizeof buf, "REQA result=%u ErrorReg=0x%02X\r\n", r, rc522_read_reg(0x06));
-	  uart_print(buf);
+	  if (r == 0) {
+	      uint8_t a = rc522_anticoll(uid);
+	      if (a == 0)
+	          snprintf(buf, sizeof buf, "UID = %02X %02X %02X %02X (BCC ok)\r\n",
+	                   uid[0], uid[1], uid[2], uid[3]);
+	      else
+	          snprintf(buf, sizeof buf, "ANTICOLL result=%u ErrorReg=0x%02X\r\n",
+	                   a, rc522_read_reg(0x06));
+	      uart_print(buf);
+	  }
 	  HAL_Delay(300);
   }
   /* USER CODE END 3 */

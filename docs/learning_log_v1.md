@@ -64,3 +64,31 @@ Keep all custom code inside USER CODE blocks.
 **Decision:** Don't hard-fail on VersionReg being 0x91/0x92. Treat "version is not 0x00/0xFF and write/read-back passes" as healthy, log the actual value, and verify function by reading a card. The pass/fail that matters is whether the chip returns a UID reliably.
 
 **Lesson:** A datasheet describes the genuine part. Cheap modules can differ, so measure the chip and compare against the document instead of assuming. Keep the "unverified" list in the entry until each item is closed.
+
+## 9. First UID read: REQA, ATQA and anticollision on the RC522
+
+**What happened:** Using the Transceive command over SPI1, the RC522 answered a REQA with an ATQA and returned a UID from both tags in the kit. The white card and the blue keyfob each gave a stable UID that passed the BCC check.
+
+**Evidence:**
+- Datasheet command table: Transceive = 1100 (0x0C), SoftReset = 1111 (0x0F). Both matched the values used.
+- ComIrqReg reset value 0x14 matched the datasheet (register dump, 0x04).
+- Datasheet Table 47 (BitFramingReg): StartSend is bit 7, TxLastBits is bits 2:0. Table 34 (ErrorReg): CollErr is bit 3, ProtocolErr is bit 0.
+- FIFOLevelReg (Table 41): bit 7 is FlushBuffer, and the level is bits 6:0, so the level is masked with 0x7F.
+- No card in range: timeout with ErrorReg = 0x00. This is the correct "nobody there" result.
+- REQA with the white card on the antenna: ATQA = 04 00.
+- Anticollision (0x93 0x20): white card UID = 01 17 37 02, blue keyfob UID = 1A B6 6C 06. Both passed the BCC check (BCC = UID0 ^ UID1 ^ UID2 ^ UID3). Each UID was stable across repeated reads.
+
+**Observation, cause not confirmed:** While only REQA was running, a card on the antenna alternated between ATQA and a timeout. That pattern went away once the anticollision step ran. My hypothesis is that a card that has answered REQA moves out of the IDLE state and ignores the next REQA. That has not been proven.
+
+**Not yet verified:**
+- The cause of the alternating timeout pattern above.
+- Whether the 30 ms wait for a response is a sensible limit or just a working one.
+- Whether the printed UIDs match what a phone NFC reader shows (byte order and format can differ between tools).
+- Still open from entry 8: what 0x18 means in VersionReg (Table 131) and the maximum SPI clock.
+
+**Known limitations (for the written spec):**
+- Only 4-byte UIDs (cascade level 1) are handled. Cards with 7- or 10-byte UIDs are not supported.
+- One card at a time. A collision is treated as a failure.
+- The card is never selected or halted.
+
+**Lesson:** Build the exchange in small steps. REQA alone, then anticollision, with a check (BCC) that proves the data arrived intact.
