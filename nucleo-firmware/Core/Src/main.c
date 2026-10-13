@@ -170,6 +170,61 @@ static uint8_t is_authorized(const uint8_t *uid)
     return 0;
 }
 
+static void lcd_pins_test(void)
+{
+    GPIO_TypeDef *ports[6] = { LCD_RS_GPIO_Port, LCD_E_GPIO_Port, LCD_D4_GPIO_Port,
+                               LCD_D5_GPIO_Port, LCD_D6_GPIO_Port, LCD_D7_GPIO_Port };
+    uint16_t pins[6] = { LCD_RS_Pin, LCD_E_Pin, LCD_D4_Pin,
+                         LCD_D5_Pin, LCD_D6_Pin, LCD_D7_Pin };
+    const char *names[6] = { "RS", "E", "D4", "D5", "D6", "D7" };
+    char b[48];
+
+    for (uint8_t i = 0; i < 6; i++) {
+        HAL_GPIO_WritePin(ports[i], pins[i], GPIO_PIN_SET);
+        HAL_Delay(5);
+        uint8_t hi = (HAL_GPIO_ReadPin(ports[i], pins[i]) == GPIO_PIN_SET);
+        HAL_GPIO_WritePin(ports[i], pins[i], GPIO_PIN_RESET);
+        HAL_Delay(5);
+        uint8_t lo = (HAL_GPIO_ReadPin(ports[i], pins[i]) == GPIO_PIN_RESET);
+        snprintf(b, sizeof b, "%s: high=%u low=%u\r\n", names[i], hi, lo);
+        uart_print(b);
+    }
+}
+
+static void lcd_write_nibble(uint8_t nib)
+{
+    HAL_GPIO_WritePin(LCD_D4_GPIO_Port, LCD_D4_Pin, (nib & 0x01) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(LCD_D5_GPIO_Port, LCD_D5_Pin, (nib & 0x02) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(LCD_D6_GPIO_Port, LCD_D6_Pin, (nib & 0x04) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(LCD_D7_GPIO_Port, LCD_D7_Pin, (nib & 0x08) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(LCD_E_GPIO_Port, LCD_E_Pin, GPIO_PIN_SET);
+    HAL_Delay(1);                       // generous; real minimum is microseconds
+    HAL_GPIO_WritePin(LCD_E_GPIO_Port, LCD_E_Pin, GPIO_PIN_RESET);
+    HAL_Delay(1);
+}
+
+static void lcd_send(uint8_t byte, uint8_t is_data)
+{
+    HAL_GPIO_WritePin(LCD_RS_GPIO_Port, LCD_RS_Pin, is_data ? GPIO_PIN_SET : GPIO_PIN_RESET);
+    lcd_write_nibble(byte >> 4);        // high nibble first
+    lcd_write_nibble(byte & 0x0F);      // then low nibble
+}
+
+static void lcd_init(void)
+{
+    HAL_Delay(50);                      // wait after power-up
+    HAL_GPIO_WritePin(LCD_RS_GPIO_Port, LCD_RS_Pin, GPIO_PIN_RESET);
+    lcd_write_nibble(0x03); HAL_Delay(5);
+    lcd_write_nibble(0x03); HAL_Delay(1);
+    lcd_write_nibble(0x03); HAL_Delay(1);
+    lcd_write_nibble(0x02); HAL_Delay(1);   // switch to 4-bit mode
+    lcd_send(0x28, 0);                  // function set: 4-bit, 2 lines, 5x8 font
+    lcd_send(0x0C, 0);                  // display on, cursor off
+    lcd_send(0x01, 0); HAL_Delay(2);    // clear display (slow command)
+    lcd_send(0x06, 0);                  // entry mode: cursor moves right
+}
+
+
 /* USER CODE END 0 */
 
 /**
@@ -228,6 +283,12 @@ int main(void)
       snprintf(b, sizeof b, "TxCtl after antenna on = 0x%02X\r\n", rc522_read_reg(0x14));
       uart_print(b);
   }
+
+  //lcd_pins_test()
+
+  lcd_init();
+  lcd_send('H', 1);
+  lcd_send('I', 1);
 
   /* USER CODE END 2 */
 
