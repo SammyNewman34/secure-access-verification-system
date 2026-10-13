@@ -158,6 +158,18 @@ static uint8_t rc522_anticoll(uint8_t *uid)
     return 0;
 }
 
+static const uint8_t WHITELIST[][4] = {
+    {0x01, 0x17, 0x37, 0x02},   // white card
+};
+#define WHITELIST_COUNT (sizeof(WHITELIST) / sizeof(WHITELIST[0]))
+
+static uint8_t is_authorized(const uint8_t *uid)
+{
+    for (uint32_t i = 0; i < WHITELIST_COUNT; i++)
+        if (memcmp(uid, WHITELIST[i], 4) == 0) return 1;
+    return 0;
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -232,8 +244,9 @@ int main(void)
 	  if (r == 0) {
 	      uint8_t a = rc522_anticoll(uid);
 	      if (a == 0)
-	          snprintf(buf, sizeof buf, "UID = %02X %02X %02X %02X (BCC ok)\r\n",
-	                   uid[0], uid[1], uid[2], uid[3]);
+	    	  snprintf(buf, sizeof buf, "UID = %02X %02X %02X %02X -> %s\r\n",
+	    	           uid[0], uid[1], uid[2], uid[3],
+	    	           is_authorized(uid) ? "GRANTED" : "DENIED");
 	      else
 	          snprintf(buf, sizeof buf, "ANTICOLL result=%u ErrorReg=0x%02X\r\n",
 	                   a, rc522_read_reg(0x06));
