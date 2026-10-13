@@ -225,6 +225,24 @@ static void lcd_init(void)
 }
 
 
+static void lcd_print(const char *s)
+{
+    while (*s) lcd_send((uint8_t)*s++, 1);
+}
+
+static void lcd_set_cursor(uint8_t row, uint8_t col)
+{
+    uint8_t addr = (row == 0 ? 0x00 : 0x40) + col;   // line 2 starts at 0x40 (standard HD44780 layout, from memory)
+    lcd_send(0x80 | addr, 0);                         // "set DDRAM address" command
+}
+
+static void lcd_clear(void)
+{
+    lcd_send(0x01, 0);
+    HAL_Delay(2);                                      // clear is a slow command
+}
+
+
 /* USER CODE END 0 */
 
 /**
@@ -287,8 +305,11 @@ int main(void)
   //lcd_pins_test()
 
   lcd_init();
-  lcd_send('H', 1);
-  lcd_send('I', 1);
+  lcd_clear();
+  lcd_set_cursor(0, 0);
+  lcd_print("Access System");
+  lcd_set_cursor(1, 0);
+  lcd_print("Ready");
 
   /* USER CODE END 2 */
 
