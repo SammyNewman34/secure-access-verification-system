@@ -333,6 +333,13 @@ int main(void)
 	          snprintf(buf, sizeof buf, "ANTICOLL result=%u ErrorReg=0x%02X\r\n",
 	                   a, rc522_read_reg(0x06));
 	      uart_print(buf);
+
+	      lcd_clear();
+	      lcd_set_cursor(0, 0);
+	      lcd_print(is_authorized(uid) ? "GRANTED" : "DENIED");
+	      lcd_set_cursor(1, 0);
+	      snprintf(buf, sizeof buf, "%02X%02X%02X%02X", uid[0], uid[1], uid[2], uid[3]);
+	      lcd_print(buf);
 	  }
 	  HAL_Delay(300);
   }
