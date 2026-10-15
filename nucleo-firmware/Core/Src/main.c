@@ -332,6 +332,7 @@ int main(void)
 	      else
 	          snprintf(buf, sizeof buf, "ANTICOLL result=%u ErrorReg=0x%02X\r\n",
 	                   a, rc522_read_reg(0x06));
+
 	      uart_print(buf);
 
 	      lcd_clear();
