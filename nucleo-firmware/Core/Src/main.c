@@ -243,6 +243,19 @@ static void lcd_clear(void)
 }
 
 
+#define RESULT_HOLD_MS 2000   // keep result on screen this long after the card leaves
+
+typedef enum { STATE_IDLE, STATE_SHOWING } ui_state_t;
+
+static void lcd_show_idle(void)
+{
+    lcd_clear();
+    lcd_set_cursor(0, 0);
+    lcd_print("ACCESS SYSTEM");
+    lcd_set_cursor(1, 0);
+    lcd_print("READY");
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -276,6 +289,8 @@ int main(void)
   MX_GPIO_Init();
   MX_SPI1_Init();
   MX_USART2_UART_Init();
+
+
   /* USER CODE BEGIN 2 */
   HAL_GPIO_WritePin(RC522_RST_GPIO_Port, RC522_RST_Pin, GPIO_PIN_RESET);
   HAL_Delay(10);
@@ -311,6 +326,10 @@ int main(void)
   lcd_set_cursor(1, 0);
   lcd_print("Ready");
 
+  ui_state_t ui_state = STATE_IDLE;
+  uint32_t last_seen_ms = 0;
+  uint8_t last_uid[4] = {0};
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -322,27 +341,30 @@ int main(void)
     /* USER CODE BEGIN 3 */
 	  char buf[80];
 	  uint8_t atqa[2], uid[5];
-	  uint8_t r = rc522_reqa(atqa);
-	  if (r == 0) {
-	      uint8_t a = rc522_anticoll(uid);
-	      if (a == 0)
-	    	  snprintf(buf, sizeof buf, "UID = %02X %02X %02X %02X -> %s\r\n",
-	    	           uid[0], uid[1], uid[2], uid[3],
-	    	           is_authorized(uid) ? "GRANTED" : "DENIED");
-	      else
-	          snprintf(buf, sizeof buf, "ANTICOLL result=%u ErrorReg=0x%02X\r\n",
-	                   a, rc522_read_reg(0x06));
 
-	      uart_print(buf);
-
-	      lcd_clear();
-	      lcd_set_cursor(0, 0);
-	      lcd_print(is_authorized(uid) ? "GRANTED" : "DENIED");
-	      lcd_set_cursor(1, 0);
-	      snprintf(buf, sizeof buf, "%02X%02X%02X%02X", uid[0], uid[1], uid[2], uid[3]);
-	      lcd_print(buf);
+	  if (rc522_reqa(atqa) == 0 && rc522_anticoll(uid) == 0) {
+	      last_seen_ms = HAL_GetTick();
+	      uint8_t changed = (ui_state == STATE_IDLE) || (memcmp(uid, last_uid, 4) != 0);
+	      if (changed) {
+	          memcpy(last_uid, uid, 4);
+	          ui_state = STATE_SHOWING;
+	          snprintf(buf, sizeof buf, "UID = %02X %02X %02X %02X -> %s\r\n",
+	                   uid[0], uid[1], uid[2], uid[3],
+	                   is_authorized(uid) ? "GRANTED" : "DENIED");
+	          uart_print(buf);
+	          lcd_clear();
+	          lcd_set_cursor(0, 0);
+	          lcd_print(is_authorized(uid) ? "GRANTED" : "DENIED");
+	          lcd_set_cursor(1, 0);
+	          snprintf(buf, sizeof buf, "%02X%02X%02X%02X", uid[0], uid[1], uid[2], uid[3]);
+	          lcd_print(buf);
+	      }
+	  } else if (ui_state == STATE_SHOWING &&
+	             (HAL_GetTick() - last_seen_ms) > RESULT_HOLD_MS) {
+	      ui_state = STATE_IDLE;
+	      lcd_show_idle();
 	  }
-	  HAL_Delay(300);
+	  HAL_Delay(100);
   }
   /* USER CODE END 3 */
 }
