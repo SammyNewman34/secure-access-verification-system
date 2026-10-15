@@ -46,7 +46,8 @@ Set SYS > Debug to Serial Wire before generating code.
 PA5 is shared between the on-board LED and SPI1_SCK. SCK wins.
 Verify with loopback or register reads before blaming the external chip.
 Keep all custom code inside USER CODE blocks.
-## 8. RC522 clone: VersionReg and ModeReg differ from the datasheet
+
+8. RC522 clone: VersionReg and ModeReg differ from the datasheet
 
 **What happened:** After wiring the RC522 and reading registers over SPI1, VersionReg (0x37) returned 0x18 and ModeReg (0x11) returned 0x3D. The module came from an AliExpress Arduino starter pack.
 
@@ -65,7 +66,7 @@ Keep all custom code inside USER CODE blocks.
 
 **Lesson:** A datasheet describes the genuine part. Cheap modules can differ, so measure the chip and compare against the document instead of assuming. Keep the "unverified" list in the entry until each item is closed.
 
-## 9. First UID read: REQA, ATQA and anticollision on the RC522
+9. First UID read: REQA, ATQA and anticollision on the RC522
 
 **What happened:** Using the Transceive command over SPI1, the RC522 answered a REQA with an ATQA and returned a UID from both tags in the kit. The white card and the blue keyfob each gave a stable UID that passed the BCC check.
 
@@ -92,3 +93,25 @@ Keep all custom code inside USER CODE blocks.
 - The card is never selected or halted.
 
 **Lesson:** Build the exchange in small steps. REQA alone, then anticollision, with a check (BCC) that proves the data arrived intact.
+
+10. LCD stuck on the result screen; fixed with a small state machine
+
+**What happened:** After GRANTED/DENIED appeared on the LCD, it stayed there when the card was removed. Only pressing RESET restored "ACCESS SYSTEM / READY".
+
+**Cause:** The code only drew the display on a successful read. A failed read (card gone) did nothing, and the idle screen was only drawn once at boot.
+
+**Fix:** Two states (IDLE, SHOWING). The display redraws only when the UID changes or when leaving idle, and returns to idle after 2 s with no successful read (RESULT_HOLD_MS). This also removed the flicker from redrawing every loop pass.
+
+**Observed:** Held card prints once. Removing the card returns to idle after about 2 s. Swapping cards updates immediately.
+
+**Not yet verified:**
+- Behavior under rapid re-presentation of the same card (known limitation, see spec).
+- The earlier alternating ATQA/timeout pattern (entry 9) has not been re-examined now that selection behavior changed.
+- LCD init timings come from memory of the standard HD44780 sequence and were not checked against the module's datasheet. They work, but margins are unproven.
+
+**Also this phase:**
+- LCD1602 wired in 4-bit mode (RS, E, D4-D7). PA8 triggers a harmless-looking CubeMX RCC/MCO1 warning because it's mapped as GPIO. MCO1 was disabled and the display works.
+- Contrast needs 5V on the pot. It did not work from 3.3V.
+
+**Lesson:** If a display is only written on events, something has to own the "return to idle" transition. Make the states explicit.
+
