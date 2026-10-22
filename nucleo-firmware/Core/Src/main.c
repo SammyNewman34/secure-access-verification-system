@@ -32,7 +32,10 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define SERVO_MIN_US       650    // safe range: measured stops (540 / 2480) plus ~100 us margin
+#define SERVO_MAX_US       2380
+#define SERVO_LOCKED_US    700    // placeholder, choose after trying the positions
+#define SERVO_UNLOCKED_US  2300   // placeholder, choose after trying the positions
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -66,6 +69,13 @@ static void MX_TIM2_Init(void);
 static void uart_print(const char *s)
 {
     HAL_UART_Transmit(&huart2, (uint8_t *)s, strlen(s), 100);
+}
+
+static void servo_set(uint16_t us)
+{
+    if (us < SERVO_MIN_US) us = SERVO_MIN_US;   // never command past the safe range
+    if (us > SERVO_MAX_US) us = SERVO_MAX_US;
+    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, us);
 }
 
 static uint8_t rc522_read_reg(uint8_t reg)
@@ -334,10 +344,12 @@ int main(void)
 
 
 
-  /* --- SERVO: hold center (temporary) --- */
-  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);           // timer generates PWM in hardware from now on
-  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 1500); // 1.5 ms pulse = nominal center
-  /* --- END SERVO --- */
+  /* --- SERVO TUNING (temporary) --- */
+  uint16_t servo_us = 1500;
+  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, servo_us);
+  uart_print("Servo tuning: + / - = 50us, . / , = 10us\r\n");
+  /* --- END SERVO TUNING --- */
 
 
   /* USER CODE END 2 */
@@ -351,6 +363,30 @@ int main(void)
     /* USER CODE BEGIN 3 */
 	  char buf[80];
 	  uint8_t atqa[2], uid[5];
+
+	  /* --- SERVO TUNING (temporary) --- */
+	  uint8_t key;
+	  if (HAL_UART_Receive(&huart2, &key, 1, 0) == HAL_OK) {   // timeout 0 = don't wait
+	      int16_t step = 0;
+	      if (key == '+') step = 50;
+	      else if (key == '-') step = -50;
+	      else if (key == '.') step = 10;
+	      else if (key == ',') step = -10;
+
+	      if (key == 'l') { servo_us = SERVO_LOCKED_US;   servo_set(servo_us); uart_print("LOCKED position\r\n"); }
+	      if (key == 'u') { servo_us = SERVO_UNLOCKED_US; servo_set(servo_us); uart_print("UNLOCKED position\r\n"); }
+
+	      if (step != 0) {
+	          int32_t next = (int32_t)servo_us + step;
+	          if (next < 300)  next = 300;      // clamp: my guess at a safe range, adjust if needed
+	          if (next > 2600) next = 2600;
+	          servo_us = (uint16_t)next;
+	          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, servo_us);
+	          snprintf(buf, sizeof buf, "servo pulse = %u us\r\n", servo_us);
+	          uart_print(buf);
+	      }
+	  }
+	  /* --- END SERVO TUNING --- */
 
 	  if (rc522_reqa(atqa) == 0 && rc522_anticoll(uid) == 0) {
 	      last_seen_ms = HAL_GetTick();
