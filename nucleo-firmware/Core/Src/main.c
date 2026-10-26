@@ -44,6 +44,8 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+I2C_HandleTypeDef hi2c1;
+
 SPI_HandleTypeDef hspi1;
 
 TIM_HandleTypeDef htim2;
@@ -60,6 +62,7 @@ static void MX_GPIO_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_TIM2_Init(void);
+static void MX_I2C1_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -76,6 +79,131 @@ static void servo_set(uint16_t us)
     if (us < SERVO_MIN_US) us = SERVO_MIN_US;   // never command past the safe range
     if (us > SERVO_MAX_US) us = SERVO_MAX_US;
     __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, us);
+}
+
+static void i2c_scan(void)
+{
+    char b[40];
+    uint8_t found = 0;
+    uart_print("I2C scan...\r\n");
+    for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
+        // HAL wants the 7-bit address shifted left by 1; 1 try, 10 ms timeout
+        if (HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)(addr << 1), 1, 10) == HAL_OK) {
+            snprintf(b, sizeof b, "  device at 0x%02X\r\n", addr);
+            uart_print(b);
+            found++;
+        }
+    }
+    snprintf(b, sizeof b, "scan done, %u found\r\n", found);
+    uart_print(b);
+}
+
+
+static void i2c_diag(void)
+{
+    char b[96];
+    uint8_t scl = (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_8) == GPIO_PIN_SET);
+    uint8_t sda = (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_9) == GPIO_PIN_SET);
+    snprintf(b, sizeof b, "SCL=%u SDA=%u SR1=0x%04lX SR2=0x%04lX\r\n",
+             scl, sda,
+             (unsigned long)hi2c1.Instance->SR1,
+             (unsigned long)hi2c1.Instance->SR2);
+    uart_print(b);
+}
+
+static void i2c_bus_clear(void)
+{
+    char b[80];
+    GPIO_InitTypeDef g = {0};
+
+    HAL_I2C_DeInit(&hi2c1);                       // peripheral lets go of PB8/PB9
+
+    g.Pin   = GPIO_PIN_8 | GPIO_PIN_9;
+    g.Mode  = GPIO_MODE_OUTPUT_OD;                // open-drain: writing 1 = release the line
+    g.Pull  = GPIO_NOPULL;                        // module's 4.7k pull-ups do the pulling
+    g.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(GPIOB, &g);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8 | GPIO_PIN_9, GPIO_PIN_SET);
+    HAL_Delay(1);
+
+    uint8_t sda_before = (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_9) == GPIO_PIN_SET);
+    uint8_t pulses = 0;
+    while (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_9) == GPIO_PIN_RESET && pulses < 9) {
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_RESET); HAL_Delay(1);
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_SET);   HAL_Delay(1);
+        pulses++;
+    }
+
+    // STOP condition: SDA goes low then high while SCL is high
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_RESET); HAL_Delay(1);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_SET);   HAL_Delay(1);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET);   HAL_Delay(1);
+
+    uint8_t sda_after = (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_9) == GPIO_PIN_SET);
+    snprintf(b, sizeof b, "bus clear: SDA before=%u, pulses=%u, SDA after=%u\r\n",
+             sda_before, pulses, sda_after);
+    uart_print(b);
+
+    MX_I2C1_Init();                               // hand the pins back to the I2C peripheral
+}
+
+
+static void ds1307_dump(void)
+{
+    uint8_t r[7];
+    char b[96];
+
+    HAL_StatusTypeDef st = HAL_I2C_Mem_Read(&hi2c1, (0x68 << 1), 0x00,
+                                            I2C_MEMADD_SIZE_8BIT, r, 7, 100);
+    if (st != HAL_OK) {
+        snprintf(b, sizeof b, "read failed: status=%d err=0x%02lX state=0x%02X\r\n",
+                 (int)st,
+                 (unsigned long)HAL_I2C_GetError(&hi2c1),
+                 (unsigned)HAL_I2C_GetState(&hi2c1));
+        uart_print(b);
+        return;
+    }
+
+    snprintf(b, sizeof b, "DS1307 raw: %02X %02X %02X %02X %02X %02X %02X\r\n",
+             r[0], r[1], r[2], r[3], r[4], r[5], r[6]);
+    uart_print(b);
+}
+
+static uint8_t bcd_ok(uint8_t v, uint8_t max_bcd)
+{
+    return ((v & 0x0F) <= 9) && ((v >> 4) <= 9) && (v <= max_bcd);
+}
+
+static void ds1307_stats(void)
+{
+    uint8_t r[7];
+    char b[96];
+    uint16_t ok = 0, failed = 0, invalid = 0;
+    uint8_t first_fail = 0;
+    uint32_t last_err = 0;
+
+    for (uint8_t i = 1; i <= 100; i++) {
+        HAL_StatusTypeDef st = HAL_I2C_Mem_Read(&hi2c1, (0x68 << 1), 0x00,
+                                                I2C_MEMADD_SIZE_8BIT, r, 7, 100);
+        if (st != HAL_OK) {
+            failed++;
+            last_err = HAL_I2C_GetError(&hi2c1);
+            if (!first_fail) first_fail = i;
+        } else if (!bcd_ok(r[0] & 0x7F, 0x59) ||    // seconds (mask off the CH bit)
+                   !bcd_ok(r[1], 0x59) ||           // minutes
+                   !bcd_ok(r[2], 0x23)) {           // hours (assumes 24 h mode)
+            invalid++;
+            if (!first_fail) first_fail = i;
+        } else {
+            ok++;
+        }
+        HAL_Delay(100);
+    }
+
+    snprintf(b, sizeof b, "stats/100: ok=%u failed=%u invalid=%u first_bad=%u last_err=0x%02lX\r\n",
+             ok, failed, invalid, first_fail, (unsigned long)last_err);
+    uart_print(b);
+    i2c_diag();     // shows SCL/SDA/SR1/SR2 afterwards
 }
 
 static uint8_t rc522_read_reg(uint8_t reg)
@@ -303,6 +431,7 @@ int main(void)
   MX_SPI1_Init();
   MX_USART2_UART_Init();
   MX_TIM2_Init();
+  MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
   HAL_GPIO_WritePin(RC522_RST_GPIO_Port, RC522_RST_Pin, GPIO_PIN_RESET);
   HAL_Delay(10);
@@ -375,6 +504,14 @@ int main(void)
 
 	      if (key == 'l') { servo_us = SERVO_LOCKED_US;   servo_set(servo_us); uart_print("LOCKED position\r\n"); }
 	      if (key == 'u') { servo_us = SERVO_UNLOCKED_US; servo_set(servo_us); uart_print("UNLOCKED position\r\n"); }
+
+	      if (key == 's') i2c_scan();
+
+	      if (key == 'd') ds1307_dump();
+	      if (key == 'b') i2c_diag();
+	      if (key == 'c') i2c_bus_clear();
+	      if (key == 't') ds1307_stats();
+
 
 	      if (step != 0) {
 	          int32_t next = (int32_t)servo_us + step;
@@ -460,6 +597,40 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+}
+
+/**
+  * @brief I2C1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_I2C1_Init(void)
+{
+
+  /* USER CODE BEGIN I2C1_Init 0 */
+
+  /* USER CODE END I2C1_Init 0 */
+
+  /* USER CODE BEGIN I2C1_Init 1 */
+
+  /* USER CODE END I2C1_Init 1 */
+  hi2c1.Instance = I2C1;
+  hi2c1.Init.ClockSpeed = 100000;
+  hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
+  hi2c1.Init.OwnAddress1 = 0;
+  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c1.Init.OwnAddress2 = 0;
+  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN I2C1_Init 2 */
+
+  /* USER CODE END I2C1_Init 2 */
+
 }
 
 /**
