@@ -36,6 +36,7 @@
 #define SERVO_MAX_US       2380
 #define SERVO_LOCKED_US    700    // placeholder, choose after trying the positions
 #define SERVO_UNLOCKED_US  2300   // placeholder, choose after trying the positions
+#define UNLOCK_HOLD_MS     5000   // how long the lock stays open after a grant (my starting value)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -101,6 +102,17 @@ static void buzzer_denied(void)       // three short beeps
         buzzer_beep(100);
         HAL_Delay(100);
     }
+}
+
+typedef enum { LOCK_LOCKED, LOCK_UNLOCKED } lock_state_t;
+static lock_state_t lock_state = LOCK_LOCKED;
+static uint32_t unlock_ms = 0;            // HAL_GetTick() when the lock last opened
+
+static void lock_set(lock_state_t s)      // the only place that moves the servo for access logic
+{
+    lock_state = s;
+    servo_set(s == LOCK_UNLOCKED ? SERVO_UNLOCKED_US : SERVO_LOCKED_US);
+    if (s == LOCK_UNLOCKED) unlock_ms = HAL_GetTick();
 }
 
 
@@ -496,12 +508,11 @@ int main(void)
 
 
 
-  /* --- SERVO TUNING (temporary) --- */
-  uint16_t servo_us = 1500;
+  /* --- LOCK START --- */
+  lock_set(LOCK_LOCKED);                       // set the compare value first, so the first pulse is LOCKED
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
-  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, servo_us);
-  uart_print("Servo tuning: + / - = 50us, . / , = 10us\r\n");
-  /* --- END SERVO TUNING --- */
+  uart_print("Lock ready: LOCKED\r\n");
+  /* --- END LOCK START --- */
 
 
   /* USER CODE END 2 */
@@ -516,44 +527,21 @@ int main(void)
 	  char buf[80];
 	  uint8_t atqa[2], uid[5];
 
-	  /* --- SERVO TUNING (temporary) --- */
+	  /* --- DEBUG KEYS (temporary) --- */
 	  uint8_t key;
 	  if (HAL_UART_Receive(&huart2, &key, 1, 0) == HAL_OK) {   // timeout 0 = don't wait
-	      int16_t step = 0;
-	      if (key == '+') step = 50;
-	      else if (key == '-') step = -50;
-	      else if (key == '.') step = 10;
-	      else if (key == ',') step = -10;
-
-	      if (key == 'l') { servo_us = SERVO_LOCKED_US;   servo_set(servo_us); uart_print("LOCKED position\r\n"); }
-	      if (key == 'u') { servo_us = SERVO_UNLOCKED_US; servo_set(servo_us); uart_print("UNLOCKED position\r\n"); }
-
+	      if (key == 'l') { lock_set(LOCK_LOCKED);   uart_print("LOCKED (manual)\r\n"); }
+	      if (key == 'u') { lock_set(LOCK_UNLOCKED); uart_print("UNLOCKED (manual)\r\n"); }
 	      if (key == 's') i2c_scan();
-
 	      if (key == 'd') ds1307_dump();
 	      if (key == 'b') i2c_diag();
 	      if (key == 'c') i2c_bus_clear();
 	      if (key == 't') ds1307_stats();
-	      if (key == 'z') {                                                    // buzzer test: one 200 ms beep
-	          HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_SET);   // base high -> transistor on -> buzzer sounds
-	          HAL_Delay(200);
-	          HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_RESET);
-	      }
+	      if (key == 'z') buzzer_beep(200);
 	      if (key == 'g') buzzer_granted();
 	      if (key == 'n') buzzer_denied();
-
-
-	      if (step != 0) {
-	          int32_t next = (int32_t)servo_us + step;
-	          if (next < 300)  next = 300;      // clamp: my guess at a safe range, adjust if needed
-	          if (next > 2600) next = 2600;
-	          servo_us = (uint16_t)next;
-	          __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, servo_us);
-	          snprintf(buf, sizeof buf, "servo pulse = %u us\r\n", servo_us);
-	          uart_print(buf);
-	      }
 	  }
-	  /* --- END SERVO TUNING --- */
+	  /* --- END DEBUG KEYS --- */
 
 	  if (rc522_reqa(atqa) == 0 && rc522_anticoll(uid) == 0) {
 	      last_seen_ms = HAL_GetTick();
@@ -561,22 +549,32 @@ int main(void)
 	      if (changed) {
 	          memcpy(last_uid, uid, 4);
 	          ui_state = STATE_SHOWING;
+	          uint8_t granted = is_authorized(uid);
+
+	          if (granted) lock_set(LOCK_UNLOCKED);          // servo first, so it reacts immediately
 	          snprintf(buf, sizeof buf, "UID = %02X %02X %02X %02X -> %s\r\n",
 	                   uid[0], uid[1], uid[2], uid[3],
-	                   is_authorized(uid) ? "GRANTED" : "DENIED");
+	                   granted ? "GRANTED" : "DENIED");
 	          uart_print(buf);
 	          lcd_clear();
 	          lcd_set_cursor(0, 0);
-	          lcd_print(is_authorized(uid) ? "GRANTED" : "DENIED");
+	          lcd_print(granted ? "GRANTED" : "DENIED");
 	          lcd_set_cursor(1, 0);
 	          snprintf(buf, sizeof buf, "%02X%02X%02X%02X", uid[0], uid[1], uid[2], uid[3]);
 	          lcd_print(buf);
+	          if (granted) buzzer_granted(); else buzzer_denied();   // last, because it blocks
 	      }
 	  } else if (ui_state == STATE_SHOWING &&
 	             (HAL_GetTick() - last_seen_ms) > RESULT_HOLD_MS) {
 	      ui_state = STATE_IDLE;
 	      lcd_show_idle();
 	  }
+
+	  if (lock_state == LOCK_UNLOCKED && (HAL_GetTick() - unlock_ms) >= UNLOCK_HOLD_MS) {
+	      lock_set(LOCK_LOCKED);
+	      uart_print("LOCKED (timeout)\r\n");
+	  }
+
 	  HAL_Delay(100);
   }
   /* USER CODE END 3 */
