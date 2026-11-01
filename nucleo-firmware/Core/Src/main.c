@@ -81,6 +81,29 @@ static void servo_set(uint16_t us)
     __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, us);
 }
 
+static void buzzer_beep(uint16_t ms)
+{
+    HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_SET);
+    HAL_Delay(ms);
+    HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_RESET);
+}
+
+
+static void buzzer_granted(void)      // one longer beep
+{
+    buzzer_beep(300);
+}
+
+
+static void buzzer_denied(void)       // three short beeps
+{
+    for (uint8_t i = 0; i < 3; i++) {
+        buzzer_beep(100);
+        HAL_Delay(100);
+    }
+}
+
+
 static void i2c_scan(void)
 {
     char b[40];
@@ -511,6 +534,13 @@ int main(void)
 	      if (key == 'b') i2c_diag();
 	      if (key == 'c') i2c_bus_clear();
 	      if (key == 't') ds1307_stats();
+	      if (key == 'z') {                                                    // buzzer test: one 200 ms beep
+	          HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_SET);   // base high -> transistor on -> buzzer sounds
+	          HAL_Delay(200);
+	          HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_RESET);
+	      }
+	      if (key == 'g') buzzer_granted();
+	      if (key == 'n') buzzer_denied();
 
 
 	      if (step != 0) {
@@ -782,6 +812,9 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOC, BUZZER_Pin|LCD_E_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(RC522_CS_GPIO_Port, RC522_CS_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
@@ -791,9 +824,6 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOB, LCD_D5_Pin|LCD_D4_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LCD_E_GPIO_Port, LCD_E_Pin, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOA, LCD_D6_Pin|LCD_RS_Pin|LCD_D7_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : B1_Pin */
@@ -801,6 +831,13 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : BUZZER_Pin LCD_E_Pin */
+  GPIO_InitStruct.Pin = BUZZER_Pin|LCD_E_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /*Configure GPIO pins : RC522_CS_Pin LCD_D6_Pin LCD_RS_Pin LCD_D7_Pin */
   GPIO_InitStruct.Pin = RC522_CS_Pin|LCD_D6_Pin|LCD_RS_Pin|LCD_D7_Pin;
@@ -815,13 +852,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : LCD_E_Pin */
-  GPIO_InitStruct.Pin = LCD_E_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(LCD_E_GPIO_Port, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
