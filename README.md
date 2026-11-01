@@ -14,7 +14,7 @@ portfolio project for embedded/firmware/RT/verification roles.
   of this project versus a typical RFID demo.
 
 ## Status
-🚧 In progress — see commit history for current phase.
+Phase 2 in progress: servo moves on command (calibrated range, placeholder lock positions), DS1307 RTC reads time over I2C (intermittent bus lockup observed, recovery tooling added, still under observation). Buzzer and integration with the access logic are next.
 
 ## Repo layout
 - `/nucleo-firmware` — STM32CubeIDE HAL project
@@ -64,6 +64,18 @@ D0-D3 are unconnected. The LCD needs 5 V for contrast and backlight (contrast di
 USART2 (PA2/PA3) via the ST-Link virtual COM port, 115200 8N1.
 
 ## Notes on the RC522 module
-
 The module (from an AliExpress starter kit) differs from the NXP MFRC522 datasheet (Rev. 3.9): ModeReg reads 0x3D instead of the documented 0x3F reset value, and VersionReg reads 0x18. The firmware therefore does not require a specific version value. It treats 0x00/0xFF as a fault and verifies function by reading cards. See `docs/learning-log.md`, entries 8-9.
 
+## Hardware wiring (Phase 2)
+
+## Servo Motor and Ds1307 (with SPI)
+
+| SG90 servo signal | PA0 (TIM2_CH1, 50 Hz PWM) | Servo power from a separate 5 V module, grounds shared with the Nucleo. Never from 3.3 V. |
+| DS1307 SCL | PB8 (I2C1_SCL) | Module has 4.7 kΩ pull-ups to VCC |
+| DS1307 SDA | PB9 (I2C1_SDA) | PB8/PB9 are listed as 5 V tolerant (FT) in the F446 datasheet |
+| DS1307 VCC / GND | Nucleo 5 V / GND | Module powered from 5 V, so the I2C lines idle at about 4.7 V |
+
+## NOTES
+
+- Servo measured safe range: 650 to 2380 µs (see learning log 11).
+- DS1307: intermittent I2C lockup (SDA stuck low) observed and recovered with a bus clear. Stable after reseating the backup battery, soak test pending (see learning log 13).

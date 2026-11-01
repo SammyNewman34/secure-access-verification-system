@@ -115,3 +115,36 @@ Keep all custom code inside USER CODE blocks.
 
 **Lesson:** If a display is only written on events, something has to own the "return to idle" transition. Make the states explicit.
 
+11. Servo stumbled on 3.3 V
+
+**Symptom:** The SG90 sometimes tried several times before it moved.
+**Cause (likely):** I had wired its power to 3.3 V instead of 5 V. After moving it to the 5 V power module, the stumbling stopped. Every measurement taken on 3.3 V is void, so I redid them.
+**Measured on 5 V (pulse widths in µs, tuned over UART with a temporary keyboard control):**
+- Low end: the servo felt like it was fighting the stop between 550 and 500 µs. The last value where it still moved was 540 µs.
+- High end: the last value where it still moved was 2480 µs. I have not checked whether this is a mechanical stop or the servo's electronics ignoring the pulse.
+- Operating range: 650 to 2380 µs (about 100 µs margin from each end, a rule of thumb). `servo_set()` clamps to this range.
+- LOCKED = 700 µs and UNLOCKED = 2300 µs are placeholders until the servo is mounted on the lock.
+**Lesson:** Measure the supply before trusting any result, and discard data taken on the wrong supply.
+
+12. I blamed the servo power module for an I2C failure, and I was wrong
+
+**Symptom:** The DS1307 scan found nothing while the servo power module was unplugged. Plugging the module in made it work.
+**First explanation:** "The I2C bus needs the servo module powered."
+**What disproved it:** The failure came back with the module plugged in, and the DS1307 also worked for a while with it unplugged.
+**What I take from it:** A change that coincides with a fix isn't necessarily the cause. Plugging in the module bumped the breadboard, which may have changed a contact or the battery seating, but that is a guess.
+**Lesson:** Change one thing at a time, and keep notes of every other thing I touched.
+
+13. DS1307 intermittent I2C failure
+
+**Symptom:** After working for a few minutes, reads failed. First `err=0x04` (acknowledge failure), later `status=2` (HAL_BUSY) and `err=0x200`/`0x220`. (Error code meanings decoded from memory, still to be checked against `stm32f4xx_hal_i2c.h`.)
+**Evidence:**
+- A diagnostic key printing pin levels and I2C status registers showed `SCL=1 SDA=0 SR2=0x0003` during the failure.
+- SDA read 0 V at the module pin, and still 0 V with the SDA wire unplugged from the Nucleo. Something on the module side was holding the line low (the DS1307 is the prime suspect, not proven).
+- A Nucleo reset did not clear it.
+- A bus-clear routine (peripheral released, SCL pulsed by hand) needed 1 clock pulse to release SDA. After that the scan and reads worked again with no power cycle.
+- One read returned `FF FF FF` for date, month and year while `HAL_I2C_Mem_Read` reported OK. A successful status does not mean valid data.
+- The date registers changed from 19/08/20 to all zeros during testing. I don't know why.
+**Current state:** Intermittent. The lockup recurred after a cold start, and the cause is not identified. The battery reseat was a hypothesis and did not hold. Parked; the diagnostic keys remain in the firmware.
+**Tools added:** `b` (print bus state), `c` (bus clear), `t` (100 reads with OK, failed and invalid counts), `s` (bus scan), `d` (raw register dump).
+**Lesson:** Print the error codes and pin states before theorizing, and treat a good run as weak evidence for a fault that appears after minutes.
+**Still to do:** Set the time, validate every read, and make recovery automatic with a counter.
