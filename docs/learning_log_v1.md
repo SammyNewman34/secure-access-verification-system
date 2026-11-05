@@ -149,6 +149,8 @@ Keep all custom code inside USER CODE blocks.
 **Lesson:** Print the error codes and pin states before theorizing, and treat a good run as weak evidence for a fault that appears after minutes.
 **Still to do:** Set the time, validate every read, and make recovery automatic with a counter.
 
+**Addendum:** After setting the time, the clock kept counting through a 5-minute power-off (Nucleo and servo module both unplugged). The datasheet says the registers' power-on state is undefined, so the earlier all-zero dates and the restart near 00:01 may have been that, not a dead backup cell. That is an inference. The SDA lockups are still unexplained.
+
 ## 14. Lock state machine: card decision drives the servo and buzzer
 
 **Goal:** Turn a card read into a physical action.
@@ -183,3 +185,13 @@ Keep all custom code inside USER CODE blocks.
 **What I added:** On reset the LCD shows "ACCESS SYSTEM / STARTING...", UART prints a banner with the build date and time, and one short beep plays. Then the idle screen appears. The antenna check prints (and shows on the LCD) only when TxControl doesn't read back with the antenna bits set.
 **Why:** The build time tells me which firmware is actually running (I once flashed the wrong project), and a boot beep tells me a reset happened.
 **Not verified:** I haven't tested the fault path with the reader unpowered. An unpowered reader reading back 0xFF would pass this check, so reader fault detection (AC-6) still needs a VersionReg check.
+
+## 18. RTC timestamps with an uptime fallback
+
+**Goal:** Put a time on each decision in the log without letting the clock chip affect the decision.
+**What I built:** A `w` key sets the DS1307 from the compiler's `__DATE__`/`__TIME__`, and an `r` key reads it back decoded. The read checks the halt bit, BCD digits and ranges. On each decision the servo, LCD and buzzer start first, then the RTC is read once. A valid read prints a wall-clock stamp, and anything else prints `up S.s` from `HAL_GetTick()`.
+**Datasheet check:** My memory of the halt bit (bit 7 of register 0) and the 12/24 h bit (bit 6 of hours) matched the datasheet excerpt. The datasheet also says the registers' power-on state is undefined, which explains the odd values I saw earlier.
+**Measured:** Good read under 1 ms (1 ms tick resolution). Failed read (SDA unplugged) 26 ms, identical three times. I expected up to the 100 ms timeout and didn't check why it was shorter.
+**Tested:** With SDA unplugged, three grants still unlocked, showed on the LCD, beeped and relocked, and logged `up ...` with `rc=1`.
+**Not tested:** a stuck-low bus (the real failure I saw earlier) and RTC accuracy against a reference. The time is only as good as the build-to-keypress delay, and drift is unmeasured.
+**Lesson:** Ordering is a design tool. Reading the RTC last means its worst case costs only the log line.

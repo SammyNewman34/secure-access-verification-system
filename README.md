@@ -16,14 +16,15 @@ portfolio project for embedded/firmware/RT/verification roles.
 ## Status
 **Phase 1 complete:** RC522 UID read (REQA + anticollision with BCC check), whitelist decision, GRANTED/DENIED on an LCD1602.
 
-**Phase 2 in progress:** card decisions drive a servo "lock" (GRANTED unlocks, relocks after 5 s) and a buzzer (non-blocking). The LCD shows the result, and a boot banner reports the build. The DS1307 RTC reads over I2C but is intermittent (cause not identified), so timestamps are not in yet. Next: RTC handling, then Phase 3 (UART protocol to the ESP32).
+**Phase 2 in progress:** card decisions drive a servo "lock" (GRANTED unlocks, relocks after 5 s) and a buzzer (non-blocking). The LCD shows the result, and a boot banner reports the build. 
+Each decision is logged over UART with a timestamp from the DS1307, falling back to an uptime stamp if the RTC read fails. The DS1307 had intermittent I2C lockups (cause not identified), so it is treated as best-effort and never affects a grant/deny decision. Next: Phase 3 (UART protocol to the ESP32).
 
 ## Repo layout
 - `/nucleo-firmware` - STM32CubeIDE HAL project
 - `/esp32-firmware` - PlatformIO/Arduino project
 - `/test-harness` - Python pytest fault-injection suite
 - `/backend` - Flask + SQLite + Streamlit dashboard
-- `/docs` - architecture notes, wiring diagrams, specs (`access-spec.md`, `learning_log_v1.md`)
+- `/docs` - architecture notes, wiring diagrams, specs (`access-spes.md`, `learning_log_v1.md`)
 
 ## Hardware wiring
 
@@ -74,4 +75,5 @@ USART2 (PA2/PA3) via the ST-Link virtual COM port, 115200 8N1.
 - Servo measured safe range: 650 to 2380 µs. The LOCKED/UNLOCKED values (700 and 2300 µs) are placeholders until the servo is mounted (learning log 11).
 - DS1307: intermittent I2C lockup (SDA stuck low) observed and recovered with a bus clear. Cause not identified; the RTC is not in the access flow (learning log 13).
 - RC522 module (from an AliExpress starter kit): ModeReg reads 0x3D instead of the documented 0x3F reset value, and VersionReg reads 0x18 (NXP MFRC522 datasheet Rev. 3.9). The firmware does not require a specific version value and verifies function by reading cards. A VersionReg 0x00/0xFF fault check is specified (AC-6) but not implemented yet. See `docs/learning_log_v1.md`, entries 8-9.
-- Specs: `docs/access-spec.md`.
+- RTC is set from the build time (accuracy limited by the build-to-set delay; drift not measured). Wall-clock time is expected to come from the ESP32 (NTP) in a later phase.
+- Specs: `docs/access-specs.md`.
