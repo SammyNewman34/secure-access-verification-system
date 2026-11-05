@@ -82,26 +82,45 @@ static void servo_set(uint16_t us)
     __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, us);
 }
 
-static void buzzer_beep(uint16_t ms)
+typedef struct {
+    const uint16_t *steps;   // durations in ms, alternating ON, OFF, ON, ...
+    uint8_t count;
+} buzzer_pattern_t;
+
+static const uint16_t PAT_GRANTED_STEPS[] = { 300 };
+static const uint16_t PAT_DENIED_STEPS[]  = { 100, 100, 100, 100, 100 };
+static const uint16_t PAT_TEST_STEPS[]    = { 200 };
+
+static const buzzer_pattern_t PAT_GRANTED = { PAT_GRANTED_STEPS, 1 };
+static const buzzer_pattern_t PAT_DENIED  = { PAT_DENIED_STEPS,  5 };
+static const buzzer_pattern_t PAT_TEST    = { PAT_TEST_STEPS,    1 };
+
+static const buzzer_pattern_t *buz_pat = NULL;   // NULL = idle
+static uint8_t  buz_step = 0;
+static uint32_t buz_step_start = 0;
+
+static void buzzer_start(const buzzer_pattern_t *p)   // returns immediately
 {
-    HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_SET);
-    HAL_Delay(ms);
-    HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_RESET);
+    buz_pat = p;
+    buz_step = 0;
+    buz_step_start = HAL_GetTick();
+    HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_SET);   // step 0 is always ON
 }
 
-
-static void buzzer_granted(void)      // one longer beep
+static void buzzer_update(void)                        // call every loop pass
 {
-    buzzer_beep(300);
-}
+    if (buz_pat == NULL) return;
+    if ((HAL_GetTick() - buz_step_start) < buz_pat->steps[buz_step]) return;
 
-
-static void buzzer_denied(void)       // three short beeps
-{
-    for (uint8_t i = 0; i < 3; i++) {
-        buzzer_beep(100);
-        HAL_Delay(100);
+    buz_step++;
+    if (buz_step >= buz_pat->count) {                  // pattern finished
+        HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_RESET);
+        buz_pat = NULL;
+        return;
     }
+    buz_step_start = HAL_GetTick();
+    HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin,
+                      (buz_step % 2 == 0) ? GPIO_PIN_SET : GPIO_PIN_RESET);   // even = ON, odd = OFF
 }
 
 typedef enum { LOCK_LOCKED, LOCK_UNLOCKED } lock_state_t;
@@ -537,9 +556,9 @@ int main(void)
 	      if (key == 'b') i2c_diag();
 	      if (key == 'c') i2c_bus_clear();
 	      if (key == 't') ds1307_stats();
-	      if (key == 'z') buzzer_beep(200);
-	      if (key == 'g') buzzer_granted();
-	      if (key == 'n') buzzer_denied();
+	      if (key == 'z') buzzer_start(&PAT_TEST);
+	      if (key == 'g') buzzer_start(&PAT_GRANTED);
+	      if (key == 'n') buzzer_start(&PAT_DENIED);
 	  }
 	  /* --- END DEBUG KEYS --- */
 
@@ -562,13 +581,15 @@ int main(void)
 	          lcd_set_cursor(1, 0);
 	          snprintf(buf, sizeof buf, "%02X%02X%02X%02X", uid[0], uid[1], uid[2], uid[3]);
 	          lcd_print(buf);
-	          if (granted) buzzer_granted(); else buzzer_denied();   // last, because it blocks
+	          buzzer_start(granted ? &PAT_GRANTED : &PAT_DENIED);   // returns immediately now
 	      }
 	  } else if (ui_state == STATE_SHOWING &&
 	             (HAL_GetTick() - last_seen_ms) > RESULT_HOLD_MS) {
 	      ui_state = STATE_IDLE;
 	      lcd_show_idle();
 	  }
+
+	  buzzer_update();
 
 	  if (lock_state == LOCK_UNLOCKED && (HAL_GetTick() - unlock_ms) >= UNLOCK_HOLD_MS) {
 	      lock_set(LOCK_LOCKED);
