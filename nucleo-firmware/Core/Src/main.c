@@ -487,7 +487,10 @@ int main(void)
   MX_USART2_UART_Init();
   MX_TIM2_Init();
   MX_I2C1_Init();
+
+
   /* USER CODE BEGIN 2 */
+
   HAL_GPIO_WritePin(RC522_RST_GPIO_Port, RC522_RST_Pin, GPIO_PIN_RESET);
   HAL_Delay(10);
   HAL_GPIO_WritePin(RC522_RST_GPIO_Port, RC522_RST_Pin, GPIO_PIN_SET);
@@ -506,28 +509,33 @@ int main(void)
   }
   */
 
-  {
-      char b[64];
-      rc522_write_reg(0x14, rc522_read_reg(0x14) | 0x03);
-      snprintf(b, sizeof b, "TxCtl after antenna on = 0x%02X\r\n", rc522_read_reg(0x14));
-      uart_print(b);
-  }
-
   //lcd_pins_test()
 
   lcd_init();
   lcd_clear();
   lcd_set_cursor(0, 0);
-  lcd_print("Access System");
+  lcd_print("ACCESS SYSTEM");
   lcd_set_cursor(1, 0);
-  lcd_print("Ready");
+  lcd_print("STARTING...");
+  uart_print("\r\n=== Access System boot ===\r\n");
+  uart_print("Build: " __DATE__ " " __TIME__ "\r\n");
+
+  uint8_t reader_ok = 1;
+  {
+      rc522_write_reg(0x14, rc522_read_reg(0x14) | 0x03);   // antenna on (do not remove)
+      uint8_t txctl = rc522_read_reg(0x14);
+      if ((txctl & 0x03) != 0x03) {                          // only speak up if the antenna did not turn on
+          reader_ok = 0;
+          char b[64];
+          snprintf(b, sizeof b, "READER FAULT: TxControl = 0x%02X (antenna not on)\r\n", txctl);
+          uart_print(b);
+      }
+  }
 
   ui_state_t ui_state = STATE_IDLE;
   uint32_t last_seen_ms = 0;
   uint8_t last_uid[4] = {0};
   uint32_t last_poll_ms = 0;
-
-
 
   /* --- LOCK START --- */
   lock_set(LOCK_LOCKED);                       // set the compare value first, so the first pulse is LOCKED
@@ -535,6 +543,19 @@ int main(void)
   uart_print("Lock ready: LOCKED\r\n");
   /* --- END LOCK START --- */
 
+  buzzer_start(&PAT_TEST);                     // short boot beep (200 ms)
+  HAL_Delay(1500);                             // keep the title readable (boot only, so blocking is fine)
+  buzzer_update();                             // beep is long over, so this switches the buzzer off
+  if (reader_ok) {
+      lcd_show_idle();
+      uart_print("Ready\r\n");
+  } else {
+      lcd_clear();
+      lcd_set_cursor(0, 0);
+      lcd_print("READER FAULT");
+      lcd_set_cursor(1, 0);
+      lcd_print("CHECK RC522");
+  }
 
   /* USER CODE END 2 */
 
