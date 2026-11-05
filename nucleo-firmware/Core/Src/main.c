@@ -70,7 +70,10 @@ static void MX_I2C1_Init(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
+
+
 /* USER CODE BEGIN 0 */
+
 static void uart_print(const char *s)
 {
     HAL_UART_Transmit(&huart2, (uint8_t *)s, strlen(s), 100);
@@ -324,6 +327,28 @@ static void rtc_print_status(void)
         snprintf(b, sizeof b, "RTC read problem: code %u (1=I2C 2=invalid 3=halted)\r\n", rc);
     uart_print(b);
 }
+
+static uint32_t rtc_ok_cnt = 0, rtc_fail_cnt = 0;
+
+// Writes either a wall-clock stamp or an uptime stamp into out. Never fails the caller.
+static void make_timestamp(char *out, size_t n, uint32_t *took_ms, uint8_t *rc_out)
+{
+    rtc_time_t t;
+    uint32_t t0 = HAL_GetTick();
+    uint8_t rc = ds1307_read_time(&t);
+    *took_ms = HAL_GetTick() - t0;
+    *rc_out = rc;
+    if (rc == 0) {
+        rtc_ok_cnt++;
+        snprintf(out, n, "%04u-%02u-%02u %02u:%02u:%02u",
+                 2000 + t.year, t.month, t.date, t.hour, t.min, t.sec);
+    } else {
+        rtc_fail_cnt++;
+        uint32_t up = HAL_GetTick();
+        snprintf(out, n, "up %lu.%lus", (unsigned long)(up / 1000), (unsigned long)((up % 1000) / 100));
+    }
+}
+
 
 static uint8_t rc522_read_reg(uint8_t reg)
 {
@@ -653,6 +678,11 @@ int main(void)
 	          rtc_print_status();                     // read back to verify
 	      }
 	      if (key == 'r') rtc_print_status();
+	      if (key == 'k') {
+	          snprintf(buf, sizeof buf, "RTC reads: ok=%lu fail=%lu\r\n",
+	                   (unsigned long)rtc_ok_cnt, (unsigned long)rtc_fail_cnt);
+	          uart_print(buf);
+	      }
 	  }
 	  /* --- END DEBUG KEYS --- */
 
@@ -667,11 +697,7 @@ int main(void)
 	              ui_state = STATE_SHOWING;
 	              uint8_t granted = is_authorized(uid);
 
-	              if (granted) lock_set(LOCK_UNLOCKED);
-	              snprintf(buf, sizeof buf, "UID = %02X %02X %02X %02X -> %s\r\n",
-	                       uid[0], uid[1], uid[2], uid[3],
-	                       granted ? "GRANTED" : "DENIED");
-	              uart_print(buf);
+	              if (granted) lock_set(LOCK_UNLOCKED);          // decision actions first
 	              lcd_clear();
 	              lcd_set_cursor(0, 0);
 	              lcd_print(granted ? "GRANTED" : "DENIED");
@@ -679,6 +705,16 @@ int main(void)
 	              snprintf(buf, sizeof buf, "%02X%02X%02X%02X", uid[0], uid[1], uid[2], uid[3]);
 	              lcd_print(buf);
 	              buzzer_start(granted ? &PAT_GRANTED : &PAT_DENIED);
+
+	              // RTC last: a failure here must never affect the decision (AC-18)
+	              char stamp[32], logline[112];
+	              uint32_t took; uint8_t rc;
+	              make_timestamp(stamp, sizeof stamp, &took, &rc);
+	              snprintf(logline, sizeof logline,
+	                       "[%s] UID = %02X %02X %02X %02X -> %s  (rtc rc=%u, %lu ms)\r\n",
+	                       stamp, uid[0], uid[1], uid[2], uid[3],
+	                       granted ? "GRANTED" : "DENIED", rc, (unsigned long)took);
+	              uart_print(logline);
 	          }
 	      } else if (ui_state == STATE_SHOWING &&
 	                 (HAL_GetTick() - last_seen_ms) > RESULT_HOLD_MS) {
