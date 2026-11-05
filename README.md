@@ -1,34 +1,31 @@
 # Secure Access Control + Verification System
 
 A dual-MCU RFID access control system built to demonstrate real-time embedded
-firmware, networking, and formal fault-injection verification — designed as a
+firmware, networking, and formal fault-injection verification, designed as a
 portfolio project for embedded/firmware/RT/verification roles.
 
 ## Architecture
 - **STM32 Nucleo-F446RE** (HAL, bare-metal): owns real-time RFID access logic,
-  servo lock control, RTC timestamping, and buzzer/LCD feedback.
-- **ESP32**: owns WiFi networking, MQTT publishing, and remote logging.
+  servo lock control, and buzzer/LCD feedback. RTC timestamping is planned.
+- **ESP32**: owns WiFi networking, MQTT publishing, and remote logging (planned).
 - **Python fault-injection harness**: pytest-based verification suite that
   exercises the system against written pass/fail specs (invalid UID spam,
-  forced mid-transaction resets, WiFi kill, etc.) — the key differentiator
-  of this project versus a typical RFID demo.
+  forced mid-transaction resets, WiFi kill, etc.). This is the key differentiator
+  of the project versus a typical RFID demo (planned).
 
 ## Status
-Phase 2 in progress: servo moves on command (calibrated range, placeholder lock positions), DS1307 RTC reads time over I2C (intermittent bus lockup observed, recovery tooling added, still under observation). Buzzer and integration with the access logic are next.
+**Phase 1 complete:** RC522 UID read (REQA + anticollision with BCC check), whitelist decision, GRANTED/DENIED on an LCD1602.
+
+**Phase 2 in progress:** card decisions drive a servo "lock" (GRANTED unlocks, relocks after 5 s) and a buzzer (non-blocking). The LCD shows the result, and a boot banner reports the build. The DS1307 RTC reads over I2C but is intermittent (cause not identified), so timestamps are not in yet. Next: RTC handling, then Phase 3 (UART protocol to the ESP32).
 
 ## Repo layout
-- `/nucleo-firmware` — STM32CubeIDE HAL project
-- `/esp32-firmware` — PlatformIO/Arduino project
-- `/test-harness` — Python pytest fault-injection suite
-- `/backend` — Flask + SQLite + Streamlit dashboard
-- `/docs` — architecture notes, wiring diagrams, specs
+- `/nucleo-firmware` - STM32CubeIDE HAL project
+- `/esp32-firmware` - PlatformIO/Arduino project
+- `/test-harness` - Python pytest fault-injection suite
+- `/backend` - Flask + SQLite + Streamlit dashboard
+- `/docs` - architecture notes, wiring diagrams, specs (`access-spec.md`, `learning_log_v1.md`)
 
-
-
-**Status: Phase 1 complete. **
-RC522 UID read (REQA + anticollision with BCC check), whitelist decision, and GRANTED/DENIED with UID on an LCD1602, running on real hardware. Next: servo lock, DS1307 timestamps, buzzer.
-
-## Hardware wiring (Phase 1)
+## Hardware wiring
 
 Nucleo-F446RE (STM32CubeIDE 2.2.0, HAL). SPI1 runs at 2.625 MHz (84 MHz APB2 / 32, mode 0).
 
@@ -60,22 +57,21 @@ Nucleo-F446RE (STM32CubeIDE 2.2.0, HAL). SPI1 runs at 2.625 MHz (84 MHz APB2 / 3
 
 D0-D3 are unconnected. The LCD needs 5 V for contrast and backlight (contrast did not work from 3.3 V); the 3.3 V logic signals from the Nucleo drive it reliably on this module.
 
+### Servo, buzzer, DS1307 (Phase 2)
+
+| Part | Nucleo pin | Notes |
+|---|---|---|
+| SG90 servo signal | PA0 (TIM2_CH1, 50 Hz PWM) | Servo power from a separate 5 V module, grounds shared with the Nucleo. Never from 3.3 V. |
+| Active buzzer | PC0 via 1 kΩ and a 2N2222 (NPN) | Buzzer + on 3.3 V, - to the collector, emitter to GND. Checked by ear and by touch (transistor stays cool); current not measured. |
+| DS1307 SCL | PB8 (I2C1_SCL) | Module has 4.7 kΩ pull-ups to VCC |
+| DS1307 SDA | PB9 (I2C1_SDA) | PB8/PB9 are listed as 5 V tolerant (FT) in the STM32F446 datasheet |
+| DS1307 VCC / GND | Nucleo 5 V / GND | Module powered from 5 V, so the I2C lines idle at about 4.7 V |
+
 ### Serial
 USART2 (PA2/PA3) via the ST-Link virtual COM port, 115200 8N1.
 
-## Notes on the RC522 module
-The module (from an AliExpress starter kit) differs from the NXP MFRC522 datasheet (Rev. 3.9): ModeReg reads 0x3D instead of the documented 0x3F reset value, and VersionReg reads 0x18. The firmware therefore does not require a specific version value. It treats 0x00/0xFF as a fault and verifies function by reading cards. See `docs/learning-log.md`, entries 8-9.
-
-## Hardware wiring (Phase 2)
-
-## Servo Motor and Ds1307 (with SPI)
-
-| SG90 servo signal | PA0 (TIM2_CH1, 50 Hz PWM) | Servo power from a separate 5 V module, grounds shared with the Nucleo. Never from 3.3 V. |
-| DS1307 SCL | PB8 (I2C1_SCL) | Module has 4.7 kΩ pull-ups to VCC |
-| DS1307 SDA | PB9 (I2C1_SDA) | PB8/PB9 are listed as 5 V tolerant (FT) in the F446 datasheet |
-| DS1307 VCC / GND | Nucleo 5 V / GND | Module powered from 5 V, so the I2C lines idle at about 4.7 V |
-
-## NOTES
-
-- Servo measured safe range: 650 to 2380 µs (see learning log 11).
-- DS1307: intermittent I2C lockup (SDA stuck low) observed and recovered with a bus clear. Stable after reseating the backup battery, soak test pending (see learning log 13).
+## Notes
+- Servo measured safe range: 650 to 2380 µs. The LOCKED/UNLOCKED values (700 and 2300 µs) are placeholders until the servo is mounted (learning log 11).
+- DS1307: intermittent I2C lockup (SDA stuck low) observed and recovered with a bus clear. Cause not identified; the RTC is not in the access flow (learning log 13).
+- RC522 module (from an AliExpress starter kit): ModeReg reads 0x3D instead of the documented 0x3F reset value, and VersionReg reads 0x18 (NXP MFRC522 datasheet Rev. 3.9). The firmware does not require a specific version value and verifies function by reading cards. A VersionReg 0x00/0xFF fault check is specified (AC-6) but not implemented yet. See `docs/learning_log_v1.md`, entries 8-9.
+- Specs: `docs/access-spec.md`.

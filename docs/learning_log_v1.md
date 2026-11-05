@@ -148,3 +148,38 @@ Keep all custom code inside USER CODE blocks.
 **Tools added:** `b` (print bus state), `c` (bus clear), `t` (100 reads with OK, failed and invalid counts), `s` (bus scan), `d` (raw register dump).
 **Lesson:** Print the error codes and pin states before theorizing, and treat a good run as weak evidence for a fault that appears after minutes.
 **Still to do:** Set the time, validate every read, and make recovery automatic with a counter.
+
+## 14. Lock state machine: card decision drives the servo and buzzer
+
+**Goal:** Turn a card read into a physical action.
+**What I built:** A two-state lock (LOCKED / UNLOCKED) with `lock_set()` as the only place that moves the servo for access logic. GRANTED unlocks and plays one beep, and the lock returns to LOCKED after 5 s (a non-blocking timer check with `HAL_GetTick()`). DENIED beeps three times and the servo stays put.
+**Verified manually:** boot goes to LOCKED, keyfob gives DENIED with no servo movement, white card unlocks and relocks at about 5 s, a held card gives one decision.
+**Design decisions:** `is_authorized()` is called once and the result reused, so the UART line, LCD and servo can't disagree. The servo is commanded before the LCD redraw so it reacts at once.
+**Not verified / limits:** the relock timer isn't paused while the card is present, and there is no position feedback.
+**Idea I decided not to build yet:** a DENIED card relocking immediately while the lock is open. It's safer, but a stranger's card could close the lock on the legitimate user. Parked as a decision for later.
+
+## 15. Making the firmware non-blocking
+
+**Problem:** `HAL_Delay` in the buzzer code made the card reader deaf for the length of each beep, and one loop delay set the pace for everything.
+**What I changed (in two steps):**
+1. The buzzer became a small pattern player (`buzzer_start()` and `buzzer_update()`) that checks `HAL_GetTick()` each loop pass.
+2. I removed the blanket 100 ms loop delay. The card reader polls on its own 100 ms timer, and the buzzer and relock check run every pass.
+**Verified:** a card tapped during a granted beep is read and shown immediately (before, the reader was deaf during the beep).
+**Observed:** starting a new pattern while one is playing merges audibly with the old one. I think this is because step 0 is always ON, so the pin never goes low, but I didn't test further. It's now spec behavior (AC-15).
+**Not fixed:** a reader poll can still block for roughly 30 to 60 ms (my estimate from the timeouts, not measured), and LCD redraws are bit-banged with 1 ms delays.
+**Lesson:** Each task asks "is it time yet?" instead of waiting, and a blocking call hides in many places (timeouts, delays inside helpers), not only in `HAL_Delay` calls I wrote myself.
+
+## 16. Generated driver files were never committed
+
+**Symptom:** `git status` showed five untracked `stm32f4xx_hal_i2c*` and `stm32f4xx_ll_i2c.h` files in `Drivers/`, plus modified `hal_conf.h` and `hal_msp.c`, after I had already pushed the "I2C" commit.
+**Cause:** I had been staging only `main.c` and the `.ioc` by name, so the files CubeMX generated when I enabled I2C never went in. My local build worked because the files were on disk.
+**Impact:** a fresh clone of the repo wouldn't have built.
+**Fix:** staged all the generated files by name in a later commit.
+**Lesson:** After every CubeMX regeneration, run `git status` and look at the untracked files too, not only the ones I edited. (I haven't tested a fresh clone yet, and that's the real check.)
+**Smaller lesson:** Git's pager (`less`) looked like a hang. `q` leaves it, and `git config --global core.pager cat` stops it happening.
+
+## 17. Boot banner and reader check
+
+**What I added:** On reset the LCD shows "ACCESS SYSTEM / STARTING...", UART prints a banner with the build date and time, and one short beep plays. Then the idle screen appears. The antenna check prints (and shows on the LCD) only when TxControl doesn't read back with the antenna bits set.
+**Why:** The build time tells me which firmware is actually running (I once flashed the wrong project), and a boot beep tells me a reset happened.
+**Not verified:** I haven't tested the fault path with the reader unpowered. An unpowered reader reading back 0xFF would pass this check, so reader fault detection (AC-6) still needs a VersionReg check.
