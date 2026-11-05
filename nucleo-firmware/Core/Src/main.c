@@ -37,6 +37,7 @@
 #define SERVO_LOCKED_US    700    // placeholder, choose after trying the positions
 #define SERVO_UNLOCKED_US  2300   // placeholder, choose after trying the positions
 #define UNLOCK_HOLD_MS     5000   // how long the lock stays open after a grant (my starting value)
+#define RFID_POLL_MS       100    // how often the card reader is polled (same rate as before)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -524,6 +525,7 @@ int main(void)
   ui_state_t ui_state = STATE_IDLE;
   uint32_t last_seen_ms = 0;
   uint8_t last_uid[4] = {0};
+  uint32_t last_poll_ms = 0;
 
 
 
@@ -562,31 +564,35 @@ int main(void)
 	  }
 	  /* --- END DEBUG KEYS --- */
 
-	  if (rc522_reqa(atqa) == 0 && rc522_anticoll(uid) == 0) {
-	      last_seen_ms = HAL_GetTick();
-	      uint8_t changed = (ui_state == STATE_IDLE) || (memcmp(uid, last_uid, 4) != 0);
-	      if (changed) {
-	          memcpy(last_uid, uid, 4);
-	          ui_state = STATE_SHOWING;
-	          uint8_t granted = is_authorized(uid);
+	  if ((HAL_GetTick() - last_poll_ms) >= RFID_POLL_MS) {
+	      last_poll_ms = HAL_GetTick();
 
-	          if (granted) lock_set(LOCK_UNLOCKED);          // servo first, so it reacts immediately
-	          snprintf(buf, sizeof buf, "UID = %02X %02X %02X %02X -> %s\r\n",
-	                   uid[0], uid[1], uid[2], uid[3],
-	                   granted ? "GRANTED" : "DENIED");
-	          uart_print(buf);
-	          lcd_clear();
-	          lcd_set_cursor(0, 0);
-	          lcd_print(granted ? "GRANTED" : "DENIED");
-	          lcd_set_cursor(1, 0);
-	          snprintf(buf, sizeof buf, "%02X%02X%02X%02X", uid[0], uid[1], uid[2], uid[3]);
-	          lcd_print(buf);
-	          buzzer_start(granted ? &PAT_GRANTED : &PAT_DENIED);   // returns immediately now
+	      if (rc522_reqa(atqa) == 0 && rc522_anticoll(uid) == 0) {
+	          last_seen_ms = HAL_GetTick();
+	          uint8_t changed = (ui_state == STATE_IDLE) || (memcmp(uid, last_uid, 4) != 0);
+	          if (changed) {
+	              memcpy(last_uid, uid, 4);
+	              ui_state = STATE_SHOWING;
+	              uint8_t granted = is_authorized(uid);
+
+	              if (granted) lock_set(LOCK_UNLOCKED);
+	              snprintf(buf, sizeof buf, "UID = %02X %02X %02X %02X -> %s\r\n",
+	                       uid[0], uid[1], uid[2], uid[3],
+	                       granted ? "GRANTED" : "DENIED");
+	              uart_print(buf);
+	              lcd_clear();
+	              lcd_set_cursor(0, 0);
+	              lcd_print(granted ? "GRANTED" : "DENIED");
+	              lcd_set_cursor(1, 0);
+	              snprintf(buf, sizeof buf, "%02X%02X%02X%02X", uid[0], uid[1], uid[2], uid[3]);
+	              lcd_print(buf);
+	              buzzer_start(granted ? &PAT_GRANTED : &PAT_DENIED);
+	          }
+	      } else if (ui_state == STATE_SHOWING &&
+	                 (HAL_GetTick() - last_seen_ms) > RESULT_HOLD_MS) {
+	          ui_state = STATE_IDLE;
+	          lcd_show_idle();
 	      }
-	  } else if (ui_state == STATE_SHOWING &&
-	             (HAL_GetTick() - last_seen_ms) > RESULT_HOLD_MS) {
-	      ui_state = STATE_IDLE;
-	      lcd_show_idle();
 	  }
 
 	  buzzer_update();
@@ -595,8 +601,7 @@ int main(void)
 	      lock_set(LOCK_LOCKED);
 	      uart_print("LOCKED (timeout)\r\n");
 	  }
-
-	  HAL_Delay(100);
+	  /* no HAL_Delay: each task now has its own timer */
   }
   /* USER CODE END 3 */
 }
