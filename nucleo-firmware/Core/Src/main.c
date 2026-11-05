@@ -261,6 +261,70 @@ static void ds1307_stats(void)
     i2c_diag();     // shows SCL/SDA/SR1/SR2 afterwards
 }
 
+typedef struct { uint8_t sec, min, hour, date, month, year; } rtc_time_t;   // year = 0..99
+
+static uint8_t to_bcd(uint8_t v)   { return (uint8_t)(((v / 10) << 4) | (v % 10)); }
+static uint8_t from_bcd(uint8_t b) { return (uint8_t)((b >> 4) * 10 + (b & 0x0F)); }
+
+// Fills t from the compile-time __DATE__ ("Nov  5 2026") and __TIME__ ("12:34:56"). Returns 1 on success.
+static uint8_t parse_build_time(rtc_time_t *t)
+{
+    static const char mon[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
+    const char *d = __DATE__, *tm = __TIME__;
+    uint8_t m = 0;
+    for (uint8_t i = 0; i < 12; i++)
+        if (strncmp(d, mon + 3 * i, 3) == 0) m = (uint8_t)(i + 1);
+    if (m == 0) return 0;
+    t->month = m;
+    t->date  = (uint8_t)((d[4] == ' ' ? 0 : d[4] - '0') * 10 + (d[5] - '0'));
+    t->year  = (uint8_t)((d[9] - '0') * 10 + (d[10] - '0'));
+    t->hour  = (uint8_t)((tm[0] - '0') * 10 + (tm[1] - '0'));
+    t->min   = (uint8_t)((tm[3] - '0') * 10 + (tm[4] - '0'));
+    t->sec   = (uint8_t)((tm[6] - '0') * 10 + (tm[7] - '0'));
+    return 1;
+}
+
+static HAL_StatusTypeDef ds1307_write_time(const rtc_time_t *t)
+{
+    uint8_t r[7] = { to_bcd(t->sec),      // bit 7 = 0 -> oscillator runs
+                     to_bcd(t->min),
+                     to_bcd(t->hour),     // bit 6 = 0 -> 24 h mode
+                     1,                   // day-of-week: unused, fixed at 1
+                     to_bcd(t->date),
+                     to_bcd(t->month),
+                     to_bcd(t->year) };
+    return HAL_I2C_Mem_Write(&hi2c1, (0x68 << 1), 0x00, I2C_MEMADD_SIZE_8BIT, r, 7, 100);
+}
+
+// returns 0 = ok, 1 = I2C failure, 2 = invalid values, 3 = clock halted
+static uint8_t ds1307_read_time(rtc_time_t *t)
+{
+    uint8_t r[7];
+    if (HAL_I2C_Mem_Read(&hi2c1, (0x68 << 1), 0x00, I2C_MEMADD_SIZE_8BIT, r, 7, 100) != HAL_OK)
+        return 1;
+    if (r[0] & 0x80) return 3;                       // clock-halt bit set
+    if (!bcd_ok(r[0], 0x59) || !bcd_ok(r[1], 0x59) || !bcd_ok(r[2], 0x23) ||   // 12 h bit also fails here
+        !bcd_ok(r[4], 0x31) || !bcd_ok(r[5], 0x12) || !bcd_ok(r[6], 0x99))
+        return 2;
+    t->sec = from_bcd(r[0]);  t->min = from_bcd(r[1]);  t->hour = from_bcd(r[2]);
+    t->date = from_bcd(r[4]); t->month = from_bcd(r[5]); t->year = from_bcd(r[6]);
+    if (t->date < 1 || t->month < 1) return 2;       // 00 is not a valid date or month
+    return 0;
+}
+
+static void rtc_print_status(void)
+{
+    rtc_time_t t;
+    char b[64];
+    uint8_t rc = ds1307_read_time(&t);
+    if (rc == 0)
+        snprintf(b, sizeof b, "RTC %04u-%02u-%02u %02u:%02u:%02u\r\n",
+                 2000 + t.year, t.month, t.date, t.hour, t.min, t.sec);
+    else
+        snprintf(b, sizeof b, "RTC read problem: code %u (1=I2C 2=invalid 3=halted)\r\n", rc);
+    uart_print(b);
+}
+
 static uint8_t rc522_read_reg(uint8_t reg)
 {
     uint8_t tx[2] = { (uint8_t)(0x80 | (reg << 1)), 0x00 };
@@ -582,6 +646,13 @@ int main(void)
 	      if (key == 'z') buzzer_start(&PAT_TEST);
 	      if (key == 'g') buzzer_start(&PAT_GRANTED);
 	      if (key == 'n') buzzer_start(&PAT_DENIED);
+	      if (key == 'w') {
+	          rtc_time_t t;
+	          if (parse_build_time(&t) && ds1307_write_time(&t) == HAL_OK) uart_print("RTC set from build time\r\n");
+	          else uart_print("RTC set FAILED\r\n");
+	          rtc_print_status();                     // read back to verify
+	      }
+	      if (key == 'r') rtc_print_status();
 	  }
 	  /* --- END DEBUG KEYS --- */
 
