@@ -38,6 +38,8 @@
 #define SERVO_UNLOCKED_US  2300   // placeholder, choose after trying the positions
 #define UNLOCK_HOLD_MS     5000   // how long the lock stays open after a grant (my starting value)
 #define RFID_POLL_MS       100    // how often the card reader is polled (same rate as before)
+#define RX1_BUF_SIZE 128                    // must be a power of two
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -67,6 +69,14 @@ static void MX_USART2_UART_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_USART1_UART_Init(void);
+
+static volatile uint8_t  rx1_buf[RX1_BUF_SIZE];
+static volatile uint16_t rx1_head = 0;      // written only by the interrupt
+static volatile uint16_t rx1_tail = 0;      // written only by the main loop
+static volatile uint32_t rx1_dropped = 0;   // bytes thrown away because the buffer was full
+static volatile uint32_t rx1_errors = 0;    // UART error events (overrun, noise, framing)
+static uint8_t  rx1_byte;                   // one-byte landing spot for HAL
+static uint32_t rx1_bytes = 0;              // bytes the main loop has taken out (test counter)
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -79,7 +89,8 @@ static void uart_print(const char *s)
     HAL_UART_Transmit(&huart2, (uint8_t *)s, strlen(s), 100);
 }
 
-static uint32_t rx1_bytes = 0, rx1_ore = 0;   // test counters for USART1 receive
+
+
 
 static void servo_set(uint16_t us)
 {
@@ -647,6 +658,8 @@ int main(void)
       lcd_print("CHECK RC522");
   }
 
+  HAL_UART_Receive_IT(&huart1, &rx1_byte, 1);   // start interrupt-driven receive on USART1
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -690,11 +703,12 @@ int main(void)
 	          uart_print("sent test line on USART1\r\n");
 	      }
 	      if (key == 'q') {
-	          snprintf(buf, sizeof buf, "USART1 rx: bytes=%lu overrun_flags=%lu\r\n",
-	                   (unsigned long)rx1_bytes, (unsigned long)rx1_ore);
+	          snprintf(buf, sizeof buf, "USART1 rx: bytes=%lu errors=%lu dropped=%lu\r\n",
+	                   (unsigned long)rx1_bytes, (unsigned long)rx1_errors, (unsigned long)rx1_dropped);
 	          uart_print(buf);
-	          rx1_bytes = 0; rx1_ore = 0;          // q prints, then resets the counters
+	          rx1_bytes = 0; rx1_errors = 0; rx1_dropped = 0;
 	      }
+
 	      if (key == 'v') {
 	          snprintf(buf, sizeof buf, "PB7=%u USART1 SR=0x%04lX CR1=0x%04lX rxstate=0x%02X\r\n",
 	                   (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_7) == GPIO_PIN_SET),
@@ -705,10 +719,9 @@ int main(void)
 	  }
 	  /* --- END DEBUG KEYS --- */
 
-	  if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_ORE)) rx1_ore++;   // hardware says a byte was lost
-	  {
-	      uint8_t b1;
-	      if (HAL_UART_Receive(&huart1, &b1, 1, 0) == HAL_OK) rx1_bytes++;   // polled, same style as the debug keys
+	  while (rx1_tail != rx1_head) {                 // drain whatever the interrupt stored
+		  rx1_tail = (rx1_tail + 1) & (RX1_BUF_SIZE - 1);
+		  rx1_bytes++;
 	  }
 
 	  if ((HAL_GetTick() - last_poll_ms) >= RFID_POLL_MS) {
@@ -1069,6 +1082,28 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART1) {
+        uint16_t next = (rx1_head + 1) & (RX1_BUF_SIZE - 1);
+        if (next == rx1_tail) {
+            rx1_dropped++;                       // buffer full: discard and count
+        } else {
+            rx1_buf[rx1_head] = rx1_byte;
+            rx1_head = next;
+        }
+        HAL_UART_Receive_IT(&huart1, &rx1_byte, 1);   // arm for the next byte
+    }
+}
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART1) {
+        rx1_errors++;
+        HAL_UART_Receive_IT(&huart1, &rx1_byte, 1);   // receiving stopped on error, so arm again
+    }
+}
 
 /* USER CODE END 4 */
 
