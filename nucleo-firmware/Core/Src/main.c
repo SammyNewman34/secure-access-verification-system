@@ -79,6 +79,8 @@ static void uart_print(const char *s)
     HAL_UART_Transmit(&huart2, (uint8_t *)s, strlen(s), 100);
 }
 
+static uint32_t rx1_bytes = 0, rx1_ore = 0;   // test counters for USART1 receive
+
 static void servo_set(uint16_t us)
 {
     if (us < SERVO_MIN_US) us = SERVO_MIN_US;   // never command past the safe range
@@ -682,8 +684,32 @@ int main(void)
 	                   (unsigned long)rtc_ok_cnt, (unsigned long)rtc_fail_cnt);
 	          uart_print(buf);
 	      }
+	      if (key == 'x') {
+	          const char msg[] = "HELLO FROM NUCLEO\r\n";
+	          HAL_UART_Transmit(&huart1, (uint8_t *)msg, sizeof msg - 1, 100);
+	          uart_print("sent test line on USART1\r\n");
+	      }
+	      if (key == 'q') {
+	          snprintf(buf, sizeof buf, "USART1 rx: bytes=%lu overrun_flags=%lu\r\n",
+	                   (unsigned long)rx1_bytes, (unsigned long)rx1_ore);
+	          uart_print(buf);
+	          rx1_bytes = 0; rx1_ore = 0;          // q prints, then resets the counters
+	      }
+	      if (key == 'v') {
+	          snprintf(buf, sizeof buf, "PB7=%u USART1 SR=0x%04lX CR1=0x%04lX rxstate=0x%02X\r\n",
+	                   (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_7) == GPIO_PIN_SET),
+	                   (unsigned long)USART1->SR, (unsigned long)USART1->CR1,
+	                   (unsigned)huart1.RxState);
+	          uart_print(buf);
+	      }
 	  }
 	  /* --- END DEBUG KEYS --- */
+
+	  if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_ORE)) rx1_ore++;   // hardware says a byte was lost
+	  {
+	      uint8_t b1;
+	      if (HAL_UART_Receive(&huart1, &b1, 1, 0) == HAL_OK) rx1_bytes++;   // polled, same style as the debug keys
+	  }
 
 	  if ((HAL_GetTick() - last_poll_ms) >= RFID_POLL_MS) {
 	      last_poll_ms = HAL_GetTick();
