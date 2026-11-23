@@ -40,6 +40,11 @@
 #define RFID_POLL_MS       100    // how often the card reader is polled (same rate as before)
 #define RX1_BUF_SIZE 128                    // must be a power of two
 
+#define FRAME_SOF           0xA5
+#define FRAME_TYPE_EVENT    0x01
+#define FRAME_TYPE_ACK      0x02
+#define FRAME_MAX_PAYLOAD   32
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -101,6 +106,21 @@ static uint16_t crc16_ccitt(const uint8_t *data, size_t len)
     return crc;
 }
 
+
+// Builds [SOF][LEN][TYPE][SEQ][PAYLOAD][CRC hi][CRC lo] into out. Returns the frame size in bytes.
+// out must hold at least len + 6 bytes. The CRC covers LEN, TYPE, SEQ and PAYLOAD.
+static size_t frame_build(uint8_t *out, uint8_t type, uint8_t seq, const uint8_t *payload, uint8_t len)
+{
+    out[0] = FRAME_SOF;
+    out[1] = len;
+    out[2] = type;
+    out[3] = seq;
+    memcpy(&out[4], payload, len);
+    uint16_t crc = crc16_ccitt(&out[1], (size_t)len + 3);
+    out[4 + len] = (uint8_t)(crc >> 8);
+    out[5 + len] = (uint8_t)(crc & 0xFF);
+    return (size_t)len + 6;
+}
 
 static void uart_print(const char *s)
 {
@@ -743,6 +763,21 @@ int main(void)
 	          snprintf(buf, sizeof buf, "CRC16 of 123456789 = 0x%04X\r\n",
 	                   crc16_ccitt((const uint8_t *)"123456789", 9));
 	          uart_print(buf);
+	      }
+
+	      if (key == 'f') {
+	          const uint8_t sample[17] = { 0x39,0x30,0x00,0x00,      // uptime 12345 ms, little-endian
+	                                       0x01,0x17,0x37,0x02,      // UID
+	                                       1, 1, 0,                  // granted, unlocked, rtc ok
+	                                       0x1A,0x0B,0x16,0x0C,0x22,0x38 };   // 26-11-22 12:34:56
+	          uint8_t fr[FRAME_MAX_PAYLOAD + 6];
+	          size_t n = frame_build(fr, FRAME_TYPE_EVENT, 7, sample, sizeof sample);
+	          uart_print("frame:");
+	          for (size_t i = 0; i < n; i++) {
+	              snprintf(buf, sizeof buf, " %02X", fr[i]);
+	              uart_print(buf);
+	          }
+	          uart_print("\r\n");
 	      }
 	  }
 	  /* --- END DEBUG KEYS --- */
