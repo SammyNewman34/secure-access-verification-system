@@ -59,6 +59,16 @@ UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 
+static volatile uint8_t  rx1_buf[RX1_BUF_SIZE];
+static volatile uint16_t rx1_head = 0;      // written only by the interrupt
+static volatile uint16_t rx1_tail = 0;      // written only by the main loop
+static volatile uint32_t rx1_dropped = 0;   // bytes thrown away because the buffer was full
+static volatile uint32_t rx1_errors = 0;    // UART error events (overrun, noise, framing)
+static uint8_t  rx1_byte;                   // one-byte landing spot for HAL
+static uint32_t rx1_bytes = 0;              // bytes the main loop has taken out (test counter)
+static volatile uint32_t rx1_err_pe = 0, rx1_err_ne = 0, rx1_err_fe = 0, rx1_err_ore = 0;
+static uint32_t rx1_unexpected = 0;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -70,19 +80,27 @@ static void MX_TIM2_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_USART1_UART_Init(void);
 
-static volatile uint8_t  rx1_buf[RX1_BUF_SIZE];
-static volatile uint16_t rx1_head = 0;      // written only by the interrupt
-static volatile uint16_t rx1_tail = 0;      // written only by the main loop
-static volatile uint32_t rx1_dropped = 0;   // bytes thrown away because the buffer was full
-static volatile uint32_t rx1_errors = 0;    // UART error events (overrun, noise, framing)
-static uint8_t  rx1_byte;                   // one-byte landing spot for HAL
-static uint32_t rx1_bytes = 0;              // bytes the main loop has taken out (test counter)
+
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+
+// CRC-16/CCITT-FALSE: polynomial 0x1021, start value 0xFFFF, no bit reflection
+static uint16_t crc16_ccitt(const uint8_t *data, size_t len)
+{
+    uint16_t crc = 0xFFFF;
+    for (size_t i = 0; i < len; i++) {
+        crc ^= (uint16_t)data[i] << 8;                       // bring the next byte in at the top
+        for (uint8_t b = 0; b < 8; b++)                      // then shift it through, one bit at a time
+            crc = (crc & 0x8000) ? (uint16_t)((crc << 1) ^ 0x1021) : (uint16_t)(crc << 1);
+    }
+    return crc;
+}
+
 
 static void uart_print(const char *s)
 {
@@ -703,10 +721,15 @@ int main(void)
 	          uart_print("sent test line on USART1\r\n");
 	      }
 	      if (key == 'q') {
-	          snprintf(buf, sizeof buf, "USART1 rx: bytes=%lu errors=%lu dropped=%lu\r\n",
-	                   (unsigned long)rx1_bytes, (unsigned long)rx1_errors, (unsigned long)rx1_dropped);
-	          uart_print(buf);
-	          rx1_bytes = 0; rx1_errors = 0; rx1_dropped = 0;
+	          char big[128];
+	          snprintf(big, sizeof big,
+	                   "rx: bytes=%lu unexpected=%lu errors=%lu dropped=%lu pe=%lu ne=%lu fe=%lu ore=%lu\r\n",
+	                   (unsigned long)rx1_bytes, (unsigned long)rx1_unexpected, (unsigned long)rx1_errors,
+	                   (unsigned long)rx1_dropped, (unsigned long)rx1_err_pe, (unsigned long)rx1_err_ne,
+	                   (unsigned long)rx1_err_fe, (unsigned long)rx1_err_ore);
+	          uart_print(big);
+	          rx1_bytes = rx1_unexpected = rx1_errors = rx1_dropped = 0;
+	          rx1_err_pe = rx1_err_ne = rx1_err_fe = rx1_err_ore = 0;
 	      }
 
 	      if (key == 'v') {
@@ -716,12 +739,19 @@ int main(void)
 	                   (unsigned)huart1.RxState);
 	          uart_print(buf);
 	      }
+	      if (key == 'y') {
+	          snprintf(buf, sizeof buf, "CRC16 of 123456789 = 0x%04X\r\n",
+	                   crc16_ccitt((const uint8_t *)"123456789", 9));
+	          uart_print(buf);
+	      }
 	  }
 	  /* --- END DEBUG KEYS --- */
 
-	  while (rx1_tail != rx1_head) {                 // drain whatever the interrupt stored
-		  rx1_tail = (rx1_tail + 1) & (RX1_BUF_SIZE - 1);
-		  rx1_bytes++;
+	  while (rx1_tail != rx1_head) {
+	      uint8_t c = rx1_buf[rx1_tail];
+	      rx1_tail = (rx1_tail + 1) & (RX1_BUF_SIZE - 1);
+	      rx1_bytes++;
+	      if (!((c >= 'A' && c <= 'S') || c == '\n')) rx1_unexpected++;
 	  }
 
 	  if ((HAL_GetTick() - last_poll_ms) >= RFID_POLL_MS) {
@@ -1101,6 +1131,11 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
     if (huart->Instance == USART1) {
         rx1_errors++;
+        { uint32_t e = HAL_UART_GetError(huart);
+          if (e & HAL_UART_ERROR_PE)  rx1_err_pe++;
+          if (e & HAL_UART_ERROR_NE)  rx1_err_ne++;
+          if (e & HAL_UART_ERROR_FE)  rx1_err_fe++;
+          if (e & HAL_UART_ERROR_ORE) rx1_err_ore++; }
         HAL_UART_Receive_IT(&huart1, &rx1_byte, 1);   // receiving stopped on error, so arm again
     }
 }
