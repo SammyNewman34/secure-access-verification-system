@@ -778,6 +778,8 @@ int main(void)
 	              uart_print(buf);
 	          }
 	          uart_print("\r\n");
+	          HAL_UART_Transmit(&huart1, fr, n, 100);     // test only: blocking send of the frame
+	          uart_print("frame sent on USART1\r\n");
 	      }
 	  }
 	  /* --- END DEBUG KEYS --- */
