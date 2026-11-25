@@ -150,7 +150,52 @@ static void uart_print(const char *s)
     HAL_UART_Transmit(&huart2, (uint8_t *)s, strlen(s), 100);
 }
 
+typedef struct {
+    uint8_t  buf[1 + 3 + FRAME_MAX_PAYLOAD + 2];   // raw bytes since the last start byte
+    size_t   n;                                    // 0 = hunting for a start byte
+    uint32_t last_byte_ms;
+    uint32_t ok, bad_crc, bad_len, timeout, skipped;
+} frame_parser_t;
 
+static frame_parser_t rxp;                         // parser for bytes arriving from the ESP32
+
+static void on_frame(const uint8_t *f)             // called with a complete, CRC-valid frame
+{
+    char b[56];
+    if (f[2] == FRAME_TYPE_ACK && f[1] == 0)
+        snprintf(b, sizeof b, "ACK received seq=%u\r\n", f[3]);
+    else
+        snprintf(b, sizeof b, "IGNORED frame type=0x%02X len=%u seq=%u\r\n", f[2], f[1], f[3]);
+    uart_print(b);
+}
+
+static void parser_feed(frame_parser_t *p, uint8_t b);
+
+static void parser_restart(frame_parser_t *p)      // rescan from the byte after the start byte
+{
+    uint8_t tmp[sizeof p->buf];
+    size_t m = p->n - 1;
+    memcpy(tmp, p->buf + 1, m);
+    p->n = 0;
+    for (size_t i = 0; i < m; i++) parser_feed(p, tmp[i]);
+}
+
+static void parser_feed(frame_parser_t *p, uint8_t b)
+{
+    if (p->n == 0) {
+        if (b == FRAME_SOF) p->buf[p->n++] = b; else p->skipped++;
+        return;
+    }
+    p->buf[p->n++] = b;
+    if (p->n == 2 && b > FRAME_MAX_PAYLOAD) { p->bad_len++; parser_restart(p); return; }
+    if (p->n >= 2 && p->n == (size_t)(6 + p->buf[1])) {
+        size_t total = p->n;
+        uint16_t rx   = ((uint16_t)p->buf[total - 2] << 8) | p->buf[total - 1];
+        uint16_t calc = crc16_ccitt(&p->buf[1], (size_t)3 + p->buf[1]);
+        if (rx == calc) { p->ok++; p->n = 0; on_frame(p->buf); }
+        else            { p->bad_crc++; parser_restart(p); }
+    }
+}
 
 
 static void servo_set(uint16_t us)
@@ -810,6 +855,13 @@ int main(void)
 	          snprintf(buf, sizeof buf, "fault case %c sent\r\n", key);
 	          uart_print(buf);
 	      }
+
+	      if (key == 'p') {
+	          snprintf(buf, sizeof buf, "parser: ok=%lu bad_crc=%lu bad_len=%lu timeout=%lu skipped=%lu\r\n",
+	                   (unsigned long)rxp.ok, (unsigned long)rxp.bad_crc, (unsigned long)rxp.bad_len,
+	                   (unsigned long)rxp.timeout, (unsigned long)rxp.skipped);
+	          uart_print(buf);
+	      }
 	  }
 	  /* --- END DEBUG KEYS --- */
 
@@ -817,10 +869,14 @@ int main(void)
 	      uint8_t c = rx1_buf[rx1_tail];
 	      rx1_tail = (rx1_tail + 1) & (RX1_BUF_SIZE - 1);
 	      rx1_bytes++;
+	      if (rxp.n > 0 && (HAL_GetTick() - rxp.last_byte_ms) >= 50) { rxp.timeout++; rxp.n = 0; }
+	      parser_feed(&rxp, c);
+	      rxp.last_byte_ms = HAL_GetTick();
 	      if (!((c >= 'A' && c <= 'S') || c == '\n')) rx1_unexpected++;
 	      if (rxdump_n < sizeof rxdump) rxdump[rxdump_n++] = c;
 	      rxdump_last_ms = HAL_GetTick();
 	  }
+	  if (rxp.n > 0 && (HAL_GetTick() - rxp.last_byte_ms) >= 50) { rxp.timeout++; rxp.n = 0; }
 
 	  if (rxdump_n > 0 && (HAL_GetTick() - rxdump_last_ms) >= 20) {   // 20 ms of silence = end of burst
 	      snprintf(buf, sizeof buf, "RX %u bytes:", (unsigned)rxdump_n);
