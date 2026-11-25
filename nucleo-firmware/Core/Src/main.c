@@ -122,6 +122,26 @@ static size_t frame_build(uint8_t *out, uint8_t type, uint8_t seq, const uint8_t
     return (size_t)len + 6;
 }
 
+// Test helper: sends the sample EVENT frame, deliberately damaged according to 'fault'.
+static void send_sample_frame(uint8_t fault)
+{
+    const uint8_t sample[17] = { 0x39,0x30,0x00,0x00, 0x01,0x17,0x37,0x02,
+                                 1, 1, 0, 0x1A,0x0B,0x16,0x0C,0x22,0x38 };
+    uint8_t fr[FRAME_MAX_PAYLOAD + 6];
+    size_t n = frame_build(fr, FRAME_TYPE_EVENT, 7, sample, sizeof sample);
+    switch (fault) {
+    case 1: fr[8] ^= 0x01; break;          // flip one payload bit: the CRC no longer matches
+    case 2: fr[1] = 0x40;  break;          // length 64 is above the maximum of 32
+    case 3: n = 10;        break;          // truncated: only the first 10 bytes are sent
+    case 4: {                              // junk start of a fake frame, then a valid frame
+        static const uint8_t pre[2] = { 0xA5, 0x05 };
+        HAL_UART_Transmit(&huart1, pre, sizeof pre, 100);
+        break; }
+    default: break;
+    }
+    HAL_UART_Transmit(&huart1, fr, n, 100);
+}
+
 static void uart_print(const char *s)
 {
     HAL_UART_Transmit(&huart2, (uint8_t *)s, strlen(s), 100);
@@ -780,6 +800,12 @@ int main(void)
 	          uart_print("\r\n");
 	          HAL_UART_Transmit(&huart1, fr, n, 100);     // test only: blocking send of the frame
 	          uart_print("frame sent on USART1\r\n");
+	      }
+
+	      if (key >= '1' && key <= '4') {
+	          send_sample_frame((uint8_t)(key - '0'));
+	          snprintf(buf, sizeof buf, "fault case %c sent\r\n", key);
+	          uart_print(buf);
 	      }
 	  }
 	  /* --- END DEBUG KEYS --- */
