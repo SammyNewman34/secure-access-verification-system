@@ -73,6 +73,9 @@ static uint8_t  rx1_byte;                   // one-byte landing spot for HAL
 static uint32_t rx1_bytes = 0;              // bytes the main loop has taken out (test counter)
 static volatile uint32_t rx1_err_pe = 0, rx1_err_ne = 0, rx1_err_fe = 0, rx1_err_ore = 0;
 static uint32_t rx1_unexpected = 0;
+static uint8_t  rxdump[64];
+static size_t   rxdump_n = 0;
+static uint32_t rxdump_last_ms = 0;
 
 /* USER CODE END PV */
 
@@ -815,6 +818,19 @@ int main(void)
 	      rx1_tail = (rx1_tail + 1) & (RX1_BUF_SIZE - 1);
 	      rx1_bytes++;
 	      if (!((c >= 'A' && c <= 'S') || c == '\n')) rx1_unexpected++;
+	      if (rxdump_n < sizeof rxdump) rxdump[rxdump_n++] = c;
+	      rxdump_last_ms = HAL_GetTick();
+	  }
+
+	  if (rxdump_n > 0 && (HAL_GetTick() - rxdump_last_ms) >= 20) {   // 20 ms of silence = end of burst
+	      snprintf(buf, sizeof buf, "RX %u bytes:", (unsigned)rxdump_n);
+	      uart_print(buf);
+	      for (size_t i = 0; i < rxdump_n; i++) {
+	          snprintf(buf, sizeof buf, " %02X", rxdump[i]);
+	          uart_print(buf);
+	      }
+	      uart_print("\r\n");
+	      rxdump_n = 0;
 	  }
 
 	  if ((HAL_GetTick() - last_poll_ms) >= RFID_POLL_MS) {
